@@ -24,9 +24,12 @@ class RVLocation {
   final double latitude;
   final double longitude;
   final String? address;
+  final String? details;
   final String addedBy;
   final DateTime createdDate;
   final List<Review> reviews;
+  final List<String> photos;
+  final List<String> videos;
 
   RVLocation({
     required this.id,
@@ -35,11 +38,16 @@ class RVLocation {
     required this.latitude,
     required this.longitude,
     this.address,
+    this.details,
     required this.addedBy,
     DateTime? createdDate,
     List<Review>? reviews,
+    List<String>? photos,
+    List<String>? videos,
   })  : createdDate = createdDate ?? DateTime.now(),
-        reviews = reviews ?? [];
+        reviews = reviews ?? [],
+        photos = photos ?? [],
+        videos = videos ?? [];
 
   double getAverageRating() {
     if (reviews.isEmpty) return 0;
@@ -59,8 +67,11 @@ class PendingLocationSubmission {
   final double latitude;
   final double longitude;
   final String? address;
+  final String? details;
   final String submittedBy;
   final DateTime submittedAt;
+  final List<String> photos;
+  final List<String> videos;
 
   PendingLocationSubmission({
     required this.id,
@@ -69,9 +80,14 @@ class PendingLocationSubmission {
     required this.latitude,
     required this.longitude,
     this.address,
+    this.details,
     required this.submittedBy,
     DateTime? submittedAt,
-  }) : submittedAt = submittedAt ?? DateTime.now();
+    List<String>? photos,
+    List<String>? videos,
+  })  : submittedAt = submittedAt ?? DateTime.now(),
+        photos = photos ?? [],
+        videos = videos ?? [];
 }
 
 class Review {
@@ -202,7 +218,12 @@ class Adventure {
   final String locationName;
   final DateTime date;
   final List<String> photos;
+  final List<String> videos;
   final double rating;
+  final bool isLocationSubmission;
+  final String? locationType;
+  final double? latitude;
+  final double? longitude;
 
   Adventure({
     required this.id,
@@ -211,8 +232,107 @@ class Adventure {
     required this.locationName,
     required this.date,
     List<String>? photos,
+    List<String>? videos,
     this.rating = 5,
-  }) : photos = photos ?? [];
+    this.isLocationSubmission = false,
+    this.locationType,
+    this.latitude,
+    this.longitude,
+  })  : photos = photos ?? [],
+        videos = videos ?? [];
+}
+
+class _SocialFeedEntry {
+  final String username;
+  final Adventure post;
+
+  const _SocialFeedEntry({
+    required this.username,
+    required this.post,
+  });
+}
+
+List<String> _parseMediaUrls(String rawValue) {
+  return rawValue
+      .split(RegExp(r'[\n,]'))
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .toList();
+}
+
+Widget _buildMediaAttachments(
+  BuildContext context, {
+  required List<String> photos,
+  required List<String> videos,
+}) {
+  if (photos.isEmpty && videos.isEmpty) {
+    return const SizedBox.shrink();
+  }
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      if (photos.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 110,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: photos.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(
+                  photos[index],
+                  width: 110,
+                  height: 110,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) {
+                    return Container(
+                      width: 110,
+                      height: 110,
+                      color: Colors.grey[200],
+                      alignment: Alignment.center,
+                      child: Icon(Icons.broken_image, color: Colors.grey[500]),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+      if (videos.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        ...videos.map(
+          (videoUrl) => Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF5F9F7),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF1B5E4B).withValues(alpha: 0.15)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.play_circle_fill, color: Color(0xFF1B5E4B)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    videoUrl,
+                    style: Theme.of(context).textTheme.bodySmall,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ],
+  );
 }
 
 class UserPreferences {
@@ -295,7 +415,17 @@ class RVLocationManager {
     }
   }
 
-  void addRVLocation(String name, String type, double latitude, double longitude, String addedBy, {String? address}) {
+  void addRVLocation(
+    String name,
+    String type,
+    double latitude,
+    double longitude,
+    String addedBy, {
+    String? address,
+    String? details,
+    List<String>? photos,
+    List<String>? videos,
+  }) {
     if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
       throw Exception('Invalid coordinates');
     }
@@ -307,7 +437,10 @@ class RVLocationManager {
       latitude: latitude,
       longitude: longitude,
       address: address,
+      details: details,
       addedBy: addedBy,
+      photos: photos,
+      videos: videos,
     );
 
     locations.add(location);
@@ -344,6 +477,9 @@ class RVLocationManager {
     double longitude,
     String submittedBy, {
     String? address,
+    String? details,
+    List<String>? photos,
+    List<String>? videos,
   }) {
     if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
       throw Exception('Invalid coordinates');
@@ -390,7 +526,10 @@ class RVLocationManager {
         latitude: latitude,
         longitude: longitude,
         address: address,
+        details: details,
         submittedBy: submittedBy,
+        photos: photos,
+        videos: videos,
       ),
     );
   }
@@ -409,6 +548,9 @@ class RVLocationManager {
       submission.longitude,
       submission.submittedBy,
       address: submission.address,
+      details: submission.details,
+      photos: submission.photos,
+      videos: submission.videos,
     );
   }
 
@@ -791,7 +933,10 @@ class _HomePageState extends State<HomePage> {
       description: 'Amazing views and great camping spots! The wildlife viewing was incredible.',
       locationName: 'Yosemite National Park',
       date: DateTime.now().subtract(const Duration(days: 5)),
-      photos: ['yosemite_1.jpg', 'yosemite_2.jpg'],
+      photos: [
+        'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=600',
+        'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=600',
+      ],
       rating: 5,
     ));
 
@@ -808,7 +953,7 @@ class _HomePageState extends State<HomePage> {
       description: 'Breathtaking mountain views and peaceful surroundings.',
       locationName: 'Rocky Mountains',
       date: DateTime.now().subtract(const Duration(days: 3)),
-      photos: ['rockies_1.jpg'],
+      photos: ['https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=600'],
       rating: 4,
     ));
 
@@ -1945,6 +2090,19 @@ class _LocationDetailPageState extends State<LocationDetailPage> {
                   Text('Type: ${widget.location.type}'),
                   Text('Added by: ${widget.location.addedBy}'),
                   Text('Location: (${widget.location.latitude.toStringAsFixed(4)}, ${widget.location.longitude.toStringAsFixed(4)})'),
+                  if (widget.location.address != null && widget.location.address!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(widget.location.address!),
+                  ],
+                  if (widget.location.details != null && widget.location.details!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(widget.location.details!),
+                  ],
+                  _buildMediaAttachments(
+                    context,
+                    photos: widget.location.photos,
+                    videos: widget.location.videos,
+                  ),
                   const SizedBox(height: 16),
                   Text(
                     'Average Rating: ${widget.location.getAverageRating().toStringAsFixed(1)}/5',
@@ -2100,8 +2258,11 @@ class AddLocationPage extends StatefulWidget {
 class _AddLocationPageState extends State<AddLocationPage> {
   final _nameController = TextEditingController();
   final _addressController = TextEditingController();
+  final _detailsController = TextEditingController();
   final _latitudeController = TextEditingController();
   final _longitudeController = TextEditingController();
+  final _photoUrlsController = TextEditingController();
+  final _videoUrlsController = TextEditingController();
   String _selectedType = 'Parking';
 
   @override
@@ -2150,6 +2311,13 @@ class _AddLocationPageState extends State<AddLocationPage> {
                   hint: 'e.g., 1500 Broadway, New York, NY 10036',
                 ),
                 const SizedBox(height: 20),
+                _buildFormField(
+                  controller: _detailsController,
+                  label: 'Notes for travelers',
+                  icon: Icons.notes,
+                  hint: 'Optional details about access, safety, hookups, or scenery',
+                ),
+                const SizedBox(height: 20),
                 _buildLocationTypeDropdown(),
                 const SizedBox(height: 20),
                 _buildFormField(
@@ -2166,6 +2334,20 @@ class _AddLocationPageState extends State<AddLocationPage> {
                   icon: Icons.navigation,
                   hint: 'e.g., -122.4194 (-180 to 180)',
                   keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 20),
+                _buildFormField(
+                  controller: _photoUrlsController,
+                  label: 'Photo URLs',
+                  icon: Icons.photo_library,
+                  hint: 'Optional photo URLs separated by commas or new lines',
+                ),
+                const SizedBox(height: 20),
+                _buildFormField(
+                  controller: _videoUrlsController,
+                  label: 'Video URLs',
+                  icon: Icons.videocam,
+                  hint: 'Optional video URLs separated by commas or new lines',
                 ),
                 const SizedBox(height: 32),
                 // Submit button
@@ -2396,6 +2578,9 @@ class _AddLocationPageState extends State<AddLocationPage> {
           lon,
           widget.username,
           address: _addressController.text.isNotEmpty ? _addressController.text : null,
+          details: _detailsController.text.trim().isNotEmpty ? _detailsController.text.trim() : null,
+          photos: _parseMediaUrls(_photoUrlsController.text),
+          videos: _parseMediaUrls(_videoUrlsController.text),
         );
       } else {
         widget.locationManager.submitLocationForApproval(
@@ -2405,13 +2590,19 @@ class _AddLocationPageState extends State<AddLocationPage> {
           lon,
           widget.username,
           address: _addressController.text.isNotEmpty ? _addressController.text : null,
+          details: _detailsController.text.trim().isNotEmpty ? _detailsController.text.trim() : null,
+          photos: _parseMediaUrls(_photoUrlsController.text),
+          videos: _parseMediaUrls(_videoUrlsController.text),
         );
       }
 
       _nameController.clear();
       _addressController.clear();
+      _detailsController.clear();
       _latitudeController.clear();
       _longitudeController.clear();
+      _photoUrlsController.clear();
+      _videoUrlsController.clear();
       _selectedType = 'Parking';
       widget.onUpdate();
 
@@ -2445,8 +2636,11 @@ class _AddLocationPageState extends State<AddLocationPage> {
   void dispose() {
     _nameController.dispose();
     _addressController.dispose();
+    _detailsController.dispose();
     _latitudeController.dispose();
     _longitudeController.dispose();
+    _photoUrlsController.dispose();
+    _videoUrlsController.dispose();
     super.dispose();
   }
 }
@@ -3611,7 +3805,7 @@ class _DashboardPageState extends State<DashboardPage> {
               _buildStatCard(
                 context,
                 icon: Icons.explore,
-                label: 'Adventures',
+                label: 'Posts',
                 value: user.adventures.length.toString(),
                 color: Color(0xFF2d8c7e),
               ),
@@ -3755,7 +3949,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-// Social Page - Follow users and see adventures
+// Social Page - Feed-first posting and pin drops
 class SocialPage extends StatefulWidget {
   final RVLocationManager locationManager;
   final String username;
@@ -3773,347 +3967,224 @@ class SocialPage extends StatefulWidget {
 }
 
 class _SocialPageState extends State<SocialPage> {
-  int _selectedTab = 0;
-  final TextEditingController _userSearchController = TextEditingController();
-  String _userSearchQuery = '';
-
-  @override
-  void dispose() {
-    _userSearchController.dispose();
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
+    final currentUser = widget.locationManager.users[widget.username];
+    if (currentUser == null) {
+      return const Center(child: Text('User not found'));
+    }
+
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.all(12),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                ElevatedButton(
-                  onPressed: () => setState(() => _selectedTab = 0),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _selectedTab == 0 ? Color(0xFF1B5E4B) : Colors.grey[300],
-                  ),
-                  child: Text('Adventures', style: TextStyle(color: _selectedTab == 0 ? Colors.white : Colors.black)),
-                ),
-                const SizedBox(width: 12),
-                ElevatedButton(
-                  onPressed: () => setState(() => _selectedTab = 1),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _selectedTab == 1 ? Color(0xFF1B5E4B) : Colors.grey[300],
-                  ),
-                  child: Text('Following', style: TextStyle(color: _selectedTab == 1 ? Colors.white : Colors.black)),
-                ),
-                const SizedBox(width: 12),
-                ElevatedButton(
-                  onPressed: () => setState(() => _selectedTab = 2),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _selectedTab == 2 ? Color(0xFF1B5E4B) : Colors.grey[300],
-                  ),
-                  child: Text('Photos', style: TextStyle(color: _selectedTab == 2 ? Colors.white : Colors.black)),
-                ),
-                const SizedBox(width: 12),
-                ElevatedButton.icon(
-                  onPressed: _showAddAdventureDialog,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFEF6C00),
-                  ),
-                  icon: const Icon(Icons.add_road, color: Colors.white),
-                  label: const Text('Add Adventure', style: TextStyle(color: Colors.white)),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (_selectedTab == 1)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-            child: TextField(
-              controller: _userSearchController,
-              decoration: const InputDecoration(
-                hintText: 'Search users by username...',
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-              onChanged: (value) {
-                setState(() {
-                  _userSearchQuery = value.trim().toLowerCase();
-                });
-              },
-            ),
-          ),
-        Expanded(
-          child: _selectedTab == 0 
-            ? _buildAdventuresFeed()
-            : _selectedTab == 1
-              ? _buildFollowingList()
-              : _buildPhotosGallery(),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAdventuresFeed() {
-    final currentUser = widget.locationManager.users[widget.username];
-    final followedUsers = <RVUser>[];
-    for (final followedUsername in currentUser?.following ?? <String>[]) {
-      final followedUser = widget.locationManager.users[followedUsername];
-      if (followedUser != null) {
-        followedUsers.add(followedUser);
-      }
-    }
-
-    if (followedUsers.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.explore, size: 64, color: Colors.grey),
-            const SizedBox(height: 16),
-            Text('Your follow feed is empty', style: Theme.of(context).textTheme.bodyLarge),
-            const SizedBox(height: 8),
-            Text('Follow profiles to see their adventures here.', style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: () => setState(() => _selectedTab = 1),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1B5E4B)),
-              icon: const Icon(Icons.people, color: Colors.white),
-              label: const Text('Find People to Follow', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
-      );
-    }
-
-    followedUsers.sort((a, b) => a.username.toLowerCase().compareTo(b.username.toLowerCase()));
-
-    final allAdventures = <MapEntry<String, Adventure>>[];
-    for (final followedUser in followedUsers) {
-      for (final adventure in followedUser.adventures) {
-        allAdventures.add(MapEntry(followedUser.username, adventure));
-      }
-    }
-
-    allAdventures.sort((a, b) => b.value.date.compareTo(a.value.date));
-
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        Card(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Following Feed', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 6),
-                Text(
-                  'You follow ${followedUsers.length} profile${followedUsers.length == 1 ? '' : 's'}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: followedUsers
-                      .map(
-                        (user) => ActionChip(
-                          onPressed: () => _showUserMiniProfile(user.username),
-                          avatar: CircleAvatar(
-                            backgroundColor: Colors.orange[200],
-                            child: Text(user.username[0].toUpperCase(), style: const TextStyle(fontSize: 11)),
-                          ),
-                          label: Text('${user.username} (${user.adventures.length})'),
-                        ),
-                      )
-                      .toList(),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (allAdventures.isEmpty)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'You are following profiles, but they have not posted adventures yet.',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ),
-          ),
-        ...allAdventures.map((entry) {
-          final username = entry.key;
-          final adventure = entry.value;
-          return Card(
-            margin: const EdgeInsets.only(bottom: 16),
+          child: Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  Text('Social Feed', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 6),
+                  Text(
+                    'See the latest updates and share posts or pin drops with photos and videos.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
                     children: [
-                      InkWell(
-                        onTap: () => _showUserMiniProfile(username),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Row(
-                          children: [
-                            CircleAvatar(
-                              backgroundColor: Colors.orange[200],
-                              child: Text(username[0].toUpperCase()),
-                            ),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(username, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                Text(adventure.date.toString().split(' ')[0], style: Theme.of(context).textTheme.bodySmall),
-                              ],
-                            ),
-                          ],
-                        ),
+                      ElevatedButton.icon(
+                        onPressed: _showPostUpdateDialog,
+                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1B5E4B)),
+                        icon: const Icon(Icons.edit, color: Colors.white),
+                        label: const Text('Post Update', style: TextStyle(color: Colors.white)),
                       ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: () => _showUserMiniProfile(username),
-                        icon: const Icon(Icons.info_outline),
-                        tooltip: 'View profile',
+                      ElevatedButton.icon(
+                        onPressed: _showPinDropDialog,
+                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF6C00)),
+                        icon: const Icon(Icons.add_location_alt, color: Colors.white),
+                        label: const Text('Submit Pin Drop', style: TextStyle(color: Colors.white)),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 12),
-                  Text(adventure.title, style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  Text(adventure.description),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Icon(Icons.location_on, size: 16, color: Colors.grey),
-                      const SizedBox(width: 4),
-                      Text(adventure.locationName, style: Theme.of(context).textTheme.bodySmall),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: List.generate(
-                      5,
-                      (i) => Icon(
-                        Icons.star,
-                        size: 16,
-                        color: i < adventure.rating.toInt() ? Colors.amber : Colors.grey[300],
-                      ),
-                    ),
                   ),
                 ],
               ),
             ),
-          );
-        }),
+          ),
+        ),
+        Expanded(child: _buildFeed(currentUser)),
       ],
     );
   }
 
-  Widget _buildFollowingList() {
-    final currentUser = widget.locationManager.users[widget.username];
-    final allUsers = widget.locationManager.users.values.where((u) {
-      if (u.username == widget.username) {
-        return false;
-      }
-      if (_userSearchQuery.isEmpty) {
-        return true;
-      }
-      return u.username.toLowerCase().contains(_userSearchQuery);
-    }).toList();
+  Widget _buildFeed(RVUser currentUser) {
+    final posts = widget.locationManager.users.values
+        .expand(
+          (user) => user.adventures.map(
+            (post) => _SocialFeedEntry(username: user.username, post: post),
+          ),
+        )
+        .toList()
+      ..sort((a, b) => b.post.date.compareTo(a.post.date));
 
-    if (allUsers.isEmpty) {
+    final pendingPinDrops = widget.locationManager.pendingLocationSubmissions
+        .where((submission) => submission.submittedBy == widget.username)
+        .length;
+
+    if (posts.isEmpty) {
       return Center(
-        child: Text(
-          _userSearchQuery.isEmpty ? 'No other users found.' : 'No users match your search.',
-          style: Theme.of(context).textTheme.bodyMedium,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.dynamic_feed, size: 64, color: Colors.grey),
+            const SizedBox(height: 12),
+            Text('No updates yet', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text('Post an update or submit a pin drop to get the feed started.', style: Theme.of(context).textTheme.bodySmall),
+          ],
         ),
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: allUsers.length,
-      itemBuilder: (context, index) {
-        final user = allUsers[index];
-        final isFollowing = currentUser?.following.contains(user.username) ?? false;
-        final hasPendingRequest = user.followRequests.contains(widget.username);
-
-        return Card(
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      children: [
+        Card(
           margin: const EdgeInsets.only(bottom: 12),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Colors.orange[200],
-              child: Text(user.username[0].toUpperCase()),
-            ),
-            title: Text(user.username),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
               children: [
-                Text('${user.locationsAdded} locations • ${user.adventures.length} adventures'),
-                if (user.preferences.requireFollowApproval)
-                  Text('Private profile: follow approval required', style: Theme.of(context).textTheme.bodySmall),
-                if (user.rvMake != null)
-                  Text('${user.rvYear} ${user.rvMake} ${user.rvModel}', style: Theme.of(context).textTheme.bodySmall),
+                CircleAvatar(
+                  backgroundColor: const Color(0xFF1B5E4B).withValues(alpha: 0.12),
+                  child: const Icon(Icons.dynamic_feed, color: Color(0xFF1B5E4B)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Community Feed', style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${posts.length} posts • $pendingPinDrops pending pin drop${pendingPinDrops == 1 ? '' : 's'} from you',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
-            trailing: ElevatedButton(
-              onPressed: () {
-                if (isFollowing) {
-                  currentUser?.unfollowUser(user.username);
-                  user.removeFollower(widget.username);
-                } else if (hasPendingRequest) {
-                  user.removeFollowRequest(widget.username);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Follow request cancelled for @${user.username}')),
-                  );
-                } else if (user.preferences.requireFollowApproval) {
-                  user.addFollowRequest(widget.username);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Follow request sent to @${user.username}')),
-                  );
-                } else {
-                  currentUser?.followUser(user.username);
-                  user.addFollower(widget.username);
-                }
-                widget.onUpdate();
-                setState(() {});
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isFollowing
-                    ? Colors.grey
-                    : hasPendingRequest
-                        ? Colors.orange
-                        : const Color(0xFF1B5E4B),
-              ),
-              child: Text(
-                isFollowing
-                    ? 'Following'
-                    : hasPendingRequest
-                        ? 'Requested'
-                        : user.preferences.requireFollowApproval
-                            ? 'Request'
-                            : 'Follow',
-                style: const TextStyle(color: Colors.white),
-              ),
-            ),
           ),
-        );
-      },
+        ),
+        ...posts.map(_buildFeedCard),
+      ],
     );
   }
 
-  void _showAddAdventureDialog() {
+  Widget _buildFeedCard(_SocialFeedEntry entry) {
+    final post = entry.post;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                InkWell(
+                  onTap: () => _showUserMiniProfile(entry.username),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        backgroundColor: Colors.orange[200],
+                        child: Text(entry.username[0].toUpperCase()),
+                      ),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(entry.username, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          Text(post.date.toString().split(' ')[0], style: Theme.of(context).textTheme.bodySmall),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  onPressed: () => _showUserMiniProfile(entry.username),
+                  icon: const Icon(Icons.info_outline),
+                  tooltip: 'View profile',
+                ),
+              ],
+            ),
+            if (post.isLocationSubmission) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  Chip(
+                    avatar: const Icon(Icons.push_pin, size: 18, color: Color(0xFF1B5E4B)),
+                    label: const Text('Pin drop submitted'),
+                    backgroundColor: const Color(0xFFF5F9F7),
+                  ),
+                  if (post.locationType != null) Chip(label: Text(post.locationType!)),
+                ],
+              ),
+            ],
+            if (post.title.trim().isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(post.title, style: Theme.of(context).textTheme.titleMedium),
+            ],
+            const SizedBox(height: 8),
+            Text(post.description),
+            if (post.locationName.trim().isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(Icons.location_on, size: 16, color: Colors.grey[600]),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(post.locationName, style: Theme.of(context).textTheme.bodySmall),
+                  ),
+                ],
+              ),
+            ],
+            if (post.latitude != null && post.longitude != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                '${post.latitude!.toStringAsFixed(4)}, ${post.longitude!.toStringAsFixed(4)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            if (!post.isLocationSubmission && post.rating > 0) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: List.generate(
+                  5,
+                  (i) => Icon(
+                    Icons.star,
+                    size: 16,
+                    color: i < post.rating.toInt() ? Colors.amber : Colors.grey[300],
+                  ),
+                ),
+              ),
+            ],
+            _buildMediaAttachments(context, photos: post.photos, videos: post.videos),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showPostUpdateDialog() {
     final currentUser = widget.locationManager.users[widget.username];
     if (currentUser == null) {
       return;
@@ -4122,7 +4193,129 @@ class _SocialPageState extends State<SocialPage> {
     final titleController = TextEditingController();
     final descriptionController = TextEditingController();
     final locationController = TextEditingController();
-    double rating = 5;
+    final photoUrlsController = TextEditingController();
+    final videoUrlsController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Post Update'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(
+                    labelText: 'Headline',
+                    border: OutlineInputBorder(),
+                    hintText: 'Sunset at the lake',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: descriptionController,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    labelText: 'Update',
+                    border: OutlineInputBorder(),
+                    hintText: 'Share what is happening on the road...',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: locationController,
+                  decoration: const InputDecoration(
+                    labelText: 'Location',
+                    border: OutlineInputBorder(),
+                    hintText: 'Optional',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: photoUrlsController,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Photo URLs',
+                    border: OutlineInputBorder(),
+                    hintText: 'Optional photo URLs separated by commas or new lines',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: videoUrlsController,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Video URLs',
+                    border: OutlineInputBorder(),
+                    hintText: 'Optional video URLs separated by commas or new lines',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                final headline = titleController.text.trim();
+                final description = descriptionController.text.trim();
+                final locationName = locationController.text.trim();
+
+                if (description.isEmpty) {
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    const SnackBar(content: Text('Add some text to your update.')),
+                  );
+                  return;
+                }
+
+                currentUser.addAdventure(
+                  Adventure(
+                    id: DateTime.now().millisecondsSinceEpoch.toString(),
+                    title: headline.isEmpty ? 'Status Update' : headline,
+                    description: description,
+                    locationName: locationName,
+                    date: DateTime.now(),
+                    photos: _parseMediaUrls(photoUrlsController.text),
+                    videos: _parseMediaUrls(videoUrlsController.text),
+                    rating: 0,
+                  ),
+                );
+
+                widget.onUpdate();
+                Navigator.pop(context);
+                setState(() {});
+
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  const SnackBar(content: Text('Update posted!')),
+                );
+              },
+              child: const Text('Post'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showPinDropDialog() {
+    final currentUser = widget.locationManager.users[widget.username];
+    if (currentUser == null) {
+      return;
+    }
+
+    final nameController = TextEditingController();
+    final addressController = TextEditingController();
+    final notesController = TextEditingController();
+    final latitudeController = TextEditingController();
+    final longitudeController = TextEditingController();
+    final photoUrlsController = TextEditingController();
+    final videoUrlsController = TextEditingController();
+    String selectedType = 'Parking';
 
     showDialog(
       context: context,
@@ -4130,58 +4323,89 @@ class _SocialPageState extends State<SocialPage> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Add Adventure'),
+              title: const Text('Submit Pin Drop'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     TextField(
-                      controller: titleController,
+                      controller: nameController,
                       decoration: const InputDecoration(
-                        labelText: 'Title',
+                        labelText: 'Location Name',
                         border: OutlineInputBorder(),
-                        hintText: 'Weekend in Zion',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedType,
+                      items: ['Parking', 'Camping', 'Travel Center', 'RV Service', 'Rest Stop', 'Guest Center', 'Rest Area', 'Sightseeing']
+                          .map((type) => DropdownMenuItem(value: type, child: Text(type)))
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setDialogState(() => selectedType = value);
+                        }
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Location Type',
+                        border: OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 12),
                     TextField(
-                      controller: locationController,
+                      controller: addressController,
                       decoration: const InputDecoration(
-                        labelText: 'Location',
+                        labelText: 'Address',
                         border: OutlineInputBorder(),
-                        hintText: 'Zion National Park',
                       ),
                     ),
                     const SizedBox(height: 12),
                     TextField(
-                      controller: descriptionController,
+                      controller: latitudeController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Latitude',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: longitudeController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Longitude',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: notesController,
                       maxLines: 3,
                       decoration: const InputDecoration(
-                        labelText: 'Description',
+                        labelText: 'Notes',
                         border: OutlineInputBorder(),
-                        hintText: 'What happened on this adventure?',
+                        hintText: 'Optional details for travelers and reviewers',
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        const Text('Rating'),
-                        Expanded(
-                          child: Slider(
-                            value: rating,
-                            min: 1,
-                            max: 5,
-                            divisions: 4,
-                            label: rating.toStringAsFixed(0),
-                            onChanged: (value) {
-                              setDialogState(() {
-                                rating = value;
-                              });
-                            },
-                          ),
-                        ),
-                        Text(rating.toStringAsFixed(0)),
-                      ],
+                    TextField(
+                      controller: photoUrlsController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Photo URLs',
+                        border: OutlineInputBorder(),
+                        hintText: 'Optional photo URLs separated by commas or new lines',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: videoUrlsController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Video URLs',
+                        border: OutlineInputBorder(),
+                        hintText: 'Optional video URLs separated by commas or new lines',
+                      ),
                     ),
                   ],
                 ),
@@ -4193,39 +4417,72 @@ class _SocialPageState extends State<SocialPage> {
                 ),
                 TextButton(
                   onPressed: () {
-                    final title = titleController.text.trim();
-                    final locationName = locationController.text.trim();
-                    final description = descriptionController.text.trim();
+                    final name = nameController.text.trim();
+                    final address = addressController.text.trim();
+                    final notes = notesController.text.trim();
 
-                    if (title.isEmpty || locationName.isEmpty || description.isEmpty) {
+                    if (name.isEmpty || latitudeController.text.trim().isEmpty || longitudeController.text.trim().isEmpty) {
                       ScaffoldMessenger.of(this.context).showSnackBar(
-                        const SnackBar(content: Text('Please complete all adventure fields.')),
+                        const SnackBar(content: Text('Name and coordinates are required.')),
                       );
                       return;
                     }
 
-                    currentUser.addAdventure(
-                      Adventure(
-                        id: DateTime.now().millisecondsSinceEpoch.toString(),
-                        title: title,
-                        description: description,
-                        locationName: locationName,
-                        date: DateTime.now(),
-                        rating: rating,
-                      ),
-                    );
+                    try {
+                      final latitude = double.parse(latitudeController.text.trim());
+                      final longitude = double.parse(longitudeController.text.trim());
+                      final photos = _parseMediaUrls(photoUrlsController.text);
+                      final videos = _parseMediaUrls(videoUrlsController.text);
 
-                    widget.onUpdate();
-                    Navigator.pop(context);
-                    setState(() {
-                      _selectedTab = 0;
-                    });
+                      widget.locationManager.submitLocationForApproval(
+                        name,
+                        selectedType,
+                        latitude,
+                        longitude,
+                        widget.username,
+                        address: address.isEmpty ? null : address,
+                        details: notes.isEmpty ? null : notes,
+                        photos: photos,
+                        videos: videos,
+                      );
 
-                    ScaffoldMessenger.of(this.context).showSnackBar(
-                      const SnackBar(content: Text('Adventure added!')),
-                    );
+                      currentUser.addAdventure(
+                        Adventure(
+                          id: DateTime.now().millisecondsSinceEpoch.toString(),
+                          title: name,
+                          description: notes.isEmpty ? 'Submitted a $selectedType pin drop for review.' : notes,
+                          locationName: address.isEmpty ? name : address,
+                          date: DateTime.now(),
+                          photos: photos,
+                          videos: videos,
+                          rating: 0,
+                          isLocationSubmission: true,
+                          locationType: selectedType,
+                          latitude: latitude,
+                          longitude: longitude,
+                        ),
+                      );
+
+                      widget.onUpdate();
+                      Navigator.pop(context);
+                      setState(() {});
+
+                      ScaffoldMessenger.of(this.context).showSnackBar(
+                        const SnackBar(content: Text('Pin drop submitted for review.')),
+                      );
+                    } catch (e) {
+                      ScaffoldMessenger.of(this.context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            e is Exception
+                                ? e.toString().replaceFirst('Exception: ', '')
+                                : 'Invalid location submission.',
+                          ),
+                        ),
+                      );
+                    }
                   },
-                  child: const Text('Save'),
+                  child: const Text('Submit'),
                 ),
               ],
             );
@@ -4270,7 +4527,7 @@ class _SocialPageState extends State<SocialPage> {
               else
                 Text('No bio yet.', style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 12),
-              Text('${profileUser.locationsAdded} locations • ${profileUser.adventures.length} adventures'),
+              Text('${profileUser.locationsAdded} locations • ${profileUser.adventures.length} posts'),
               const SizedBox(height: 6),
               Text('${profileUser.followers.length} followers • ${profileUser.following.length} following'),
               const SizedBox(height: 8),
@@ -4336,158 +4593,6 @@ class _SocialPageState extends State<SocialPage> {
     );
   }
 
-  Widget _buildPhotosGallery() {
-    final currentUser = widget.locationManager.users[widget.username];
-    if (currentUser == null) {
-      return const Center(child: Text('User not found'));
-    }
-
-    if (currentUser.photos.isEmpty) {
-      return SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Container(
-              decoration: BoxDecoration(
-                color: Color(0xFFF5F9F7),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Color(0xFF1B5E4B).withValues(alpha: 0.2), style: BorderStyle.solid, strokeAlign: 1),
-              ),
-              padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.photo_library, size: 48, color: Colors.grey[400]),
-                    const SizedBox(height: 12),
-                    Text('No photos yet', style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.grey)),
-                    const SizedBox(height: 12),
-                    ElevatedButton.icon(
-                      onPressed: () => _showPhotoOptions(currentUser),
-                      style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF1B5E4B)),
-                      icon: const Icon(Icons.add, color: Colors.white),
-                      label: const Text('Add Photos', style: TextStyle(color: Colors.white)),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 12, mainAxisSpacing: 12),
-        itemCount: currentUser.photos.length + 1,
-        itemBuilder: (context, index) {
-          if (index == currentUser.photos.length) {
-            return GestureDetector(
-              onTap: () => _showPhotoOptions(currentUser),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Color(0xFFF5F9F7),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Color(0xFF1B5E4B).withValues(alpha: 0.3)),
-                ),
-                child: Center(
-                  child: Icon(Icons.add_photo_alternate, size: 32, color: Color(0xFF1B5E4B)),
-                ),
-              ),
-            );
-          }
-          return Container(
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), color: Colors.grey[200]),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.network(currentUser.photos[index], fit: BoxFit.cover, errorBuilder: (_, _, _) {
-                return Center(child: Icon(Icons.broken_image, color: Colors.grey[400]));
-              }),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  void _showPhotoOptions(RVUser user) {
-    showDialog(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('Add Photo'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () {
-              Navigator.pop(context);
-              _showPhotoUrlDialog(user);
-            },
-            child: const Row(
-              children: [
-                Icon(Icons.link),
-                SizedBox(width: 12),
-                Text('Add from URL'),
-              ],
-            ),
-          ),
-          SimpleDialogOption(
-            onPressed: () {
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Photo gallery integration coming soon')),
-              );
-            },
-            child: const Row(
-              children: [
-                Icon(Icons.photo_library),
-                SizedBox(width: 12),
-                Text('Choose from Gallery'),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showPhotoUrlDialog(RVUser user) {
-    final controller = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Photo URL'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: 'Enter photo URL',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (controller.text.isNotEmpty) {
-                user.addPhoto(controller.text);
-                widget.onUpdate();
-                Navigator.pop(context);
-                setState(() {});
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Photo added!')),
-                );
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 // Settings Page
@@ -4802,9 +4907,18 @@ class _SettingsPageState extends State<SettingsPage> {
                       Text('Submitted by: ${submission.submittedBy}'),
                       if (submission.address != null && submission.address!.trim().isNotEmpty)
                         Text(submission.address!),
+                      if (submission.details != null && submission.details!.trim().isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(submission.details!),
+                      ],
                       Text(
                         '${submission.latitude.toStringAsFixed(4)}, ${submission.longitude.toStringAsFixed(4)}',
                         style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      _buildMediaAttachments(
+                        context,
+                        photos: submission.photos,
+                        videos: submission.videos,
                       ),
                       const SizedBox(height: 6),
                       Row(
