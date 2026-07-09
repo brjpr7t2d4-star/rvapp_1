@@ -16,6 +16,7 @@ import 'dart:math';
 const bool kSeedSampleLocations = false;
 const String kGoogleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
 const String kCustomAppBackgroundImageKey = 'custom_app_background_image_url';
+const String kPersistedSocialStateKey = 'persisted_social_state_v1';
 const String kSignupTrackingApiBaseUrl = String.fromEnvironment('SIGNUP_TRACKING_API_BASE_URL');
 
 bool get hasGoogleMapsApiKey => kGoogleMapsApiKey.trim().isNotEmpty;
@@ -776,6 +777,21 @@ class RVLocationManager {
   int _messageIdCounter = 0;
   int _notificationIdCounter = 0;
 
+  DateTime _parseDateTime(dynamic rawValue, DateTime fallback) {
+    if (rawValue is String) {
+      return DateTime.tryParse(rawValue) ?? fallback;
+    }
+    return fallback;
+  }
+
+  int _idCounterFromString(String id, String prefix) {
+    if (!id.startsWith(prefix)) {
+      return -1;
+    }
+    final parsed = int.tryParse(id.substring(prefix.length));
+    return parsed ?? -1;
+  }
+
   String _threadId(String usernameA, String usernameB) {
     final usersSorted = [usernameA, usernameB]..sort();
     return '${usersSorted.first}__${usersSorted.last}';
@@ -821,6 +837,273 @@ class RVLocationManager {
       );
       userNotifications[username] = [];
     }
+  }
+
+  Future<void> savePersistedSocialState() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final serializedUsers = <String, dynamic>{};
+    users.forEach((username, user) {
+      serializedUsers[username] = {
+        'bio': user.bio,
+        'hometown': user.hometown,
+        'profilePicture': user.profilePicture,
+        'rvMake': user.rvMake,
+        'rvModel': user.rvModel,
+        'rvYear': user.rvYear,
+        'photos': user.photos,
+        'videos': user.videos,
+        'socials': user.socials,
+        'adventures': user.adventures.map((adventure) {
+          return {
+            'id': adventure.id,
+            'title': adventure.title,
+            'description': adventure.description,
+            'locationName': adventure.locationName,
+            'date': adventure.date.toUtc().toIso8601String(),
+            'photos': adventure.photos,
+            'videos': adventure.videos,
+            'rating': adventure.rating,
+            'isLocationSubmission': adventure.isLocationSubmission,
+            'locationType': adventure.locationType,
+            'latitude': adventure.latitude,
+            'longitude': adventure.longitude,
+            'likedBy': adventure.likedBy,
+            'comments': adventure.comments
+                .map((comment) => {
+                      'id': comment.id,
+                      'username': comment.username,
+                      'text': comment.text,
+                      'createdAt': comment.createdAt.toUtc().toIso8601String(),
+                    })
+                .toList(),
+          };
+        }).toList(),
+      };
+    });
+
+    final serializedThreads = <String, dynamic>{};
+    directMessageThreads.forEach((threadId, messages) {
+      serializedThreads[threadId] = messages
+          .map(
+            (message) => {
+              'id': message.id,
+              'threadId': message.threadId,
+              'fromUsername': message.fromUsername,
+              'toUsername': message.toUsername,
+              'text': message.text,
+              'sentAt': message.sentAt.toUtc().toIso8601String(),
+              'isRead': message.isRead,
+            },
+          )
+          .toList();
+    });
+
+    final serializedNotifications = <String, dynamic>{};
+    userNotifications.forEach((username, notifications) {
+      serializedNotifications[username] = notifications
+          .map(
+            (notification) => {
+              'id': notification.id,
+              'username': notification.username,
+              'title': notification.title,
+              'body': notification.body,
+              'type': notification.type,
+              'relatedUsername': notification.relatedUsername,
+              'createdAt': notification.createdAt.toUtc().toIso8601String(),
+              'isRead': notification.isRead,
+            },
+          )
+          .toList();
+    });
+
+    final payload = {
+      'users': serializedUsers,
+      'directMessageThreads': serializedThreads,
+      'userNotifications': serializedNotifications,
+    };
+
+    await prefs.setString(kPersistedSocialStateKey, jsonEncode(payload));
+  }
+
+  Future<void> loadPersistedSocialState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(kPersistedSocialStateKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return;
+    }
+
+    Map<String, dynamic> decoded;
+    try {
+      decoded = jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return;
+    }
+
+    final rawUsers = decoded['users'] as Map<String, dynamic>? ?? const {};
+    rawUsers.forEach((username, value) {
+      final user = users[username];
+      final map = value as Map<String, dynamic>?;
+      if (user == null || map == null) {
+        return;
+      }
+
+      user.updateBio(map['bio']?.toString() ?? '');
+      user.updateHometown(map['hometown']?.toString() ?? '');
+      user.updateProfilePicture(map['profilePicture']?.toString() ?? '');
+      user.updateRVInfo(
+        map['rvMake']?.toString() ?? '',
+        map['rvModel']?.toString() ?? '',
+        map['rvYear']?.toString() ?? '',
+      );
+
+      user.photos
+        ..clear()
+        ..addAll((map['photos'] as List<dynamic>? ?? const []).map((e) => e.toString()));
+      user.videos
+        ..clear()
+        ..addAll((map['videos'] as List<dynamic>? ?? const []).map((e) => e.toString()));
+      user.socials
+        ..clear()
+        ..addAll((map['socials'] as Map<String, dynamic>? ?? const {})
+            .map((key, value) => MapEntry(key, value.toString())));
+
+      final rawAdventures = map['adventures'] as List<dynamic>? ?? const [];
+      user.adventures.clear();
+      for (final rawAdventure in rawAdventures) {
+        final adventureMap = rawAdventure as Map<String, dynamic>?;
+        if (adventureMap == null) {
+          continue;
+        }
+
+        final commentsRaw = adventureMap['comments'] as List<dynamic>? ?? const [];
+        final comments = commentsRaw
+            .map((rawComment) {
+              final commentMap = rawComment as Map<String, dynamic>?;
+              if (commentMap == null) {
+                return null;
+              }
+
+              final commentText = _normalizeNullableText(commentMap['text']?.toString());
+              final commentUser = _normalizeNullableText(commentMap['username']?.toString());
+              if (commentText == null || commentUser == null) {
+                return null;
+              }
+
+              return PostComment(
+                id: commentMap['id']?.toString() ?? 'comment_${DateTime.now().microsecondsSinceEpoch}',
+                username: commentUser,
+                text: commentText,
+                createdAt: _parseDateTime(commentMap['createdAt'], DateTime.now()),
+              );
+            })
+            .whereType<PostComment>()
+            .toList();
+
+        user.addAdventure(
+          Adventure(
+            id: adventureMap['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
+            title: adventureMap['title']?.toString() ?? '',
+            description: adventureMap['description']?.toString() ?? '',
+            locationName: adventureMap['locationName']?.toString() ?? '',
+            date: _parseDateTime(adventureMap['date'], DateTime.now()),
+            photos: (adventureMap['photos'] as List<dynamic>? ?? const [])
+                .map((e) => e.toString())
+                .toList(),
+            videos: (adventureMap['videos'] as List<dynamic>? ?? const [])
+                .map((e) => e.toString())
+                .toList(),
+            rating: (adventureMap['rating'] as num?)?.toDouble() ?? 0,
+            isLocationSubmission: adventureMap['isLocationSubmission'] == true,
+            locationType: _normalizeNullableText(adventureMap['locationType']?.toString()),
+            latitude: (adventureMap['latitude'] as num?)?.toDouble(),
+            longitude: (adventureMap['longitude'] as num?)?.toDouble(),
+            likedBy: (adventureMap['likedBy'] as List<dynamic>? ?? const [])
+                .map((e) => e.toString())
+                .toList(),
+            comments: comments,
+          ),
+        );
+      }
+    });
+
+    directMessageThreads.clear();
+    final rawThreads = decoded['directMessageThreads'] as Map<String, dynamic>? ?? const {};
+    var maxMessageCounter = -1;
+    rawThreads.forEach((threadId, rawMessages) {
+      final messagesList = rawMessages as List<dynamic>? ?? const [];
+      final messages = <DirectMessage>[];
+      for (final rawMessage in messagesList) {
+        final map = rawMessage as Map<String, dynamic>?;
+        if (map == null) {
+          continue;
+        }
+
+        final id = map['id']?.toString() ?? '';
+        maxMessageCounter = max(maxMessageCounter, _idCounterFromString(id, 'msg_'));
+
+        final text = _normalizeNullableText(map['text']?.toString());
+        final fromUsername = _normalizeNullableText(map['fromUsername']?.toString());
+        final toUsername = _normalizeNullableText(map['toUsername']?.toString());
+        if (text == null || fromUsername == null || toUsername == null) {
+          continue;
+        }
+
+        messages.add(
+          DirectMessage(
+            id: id.isEmpty ? 'msg_${maxMessageCounter + 1}' : id,
+            threadId: map['threadId']?.toString() ?? threadId,
+            fromUsername: fromUsername,
+            toUsername: toUsername,
+            text: text,
+            sentAt: _parseDateTime(map['sentAt'], DateTime.now()),
+            isRead: map['isRead'] == true,
+          ),
+        );
+      }
+      directMessageThreads[threadId] = messages;
+    });
+    _messageIdCounter = max(_messageIdCounter, maxMessageCounter + 1);
+
+    userNotifications.clear();
+    final rawNotifications = decoded['userNotifications'] as Map<String, dynamic>? ?? const {};
+    var maxNotificationCounter = -1;
+    rawNotifications.forEach((username, rawList) {
+      final list = rawList as List<dynamic>? ?? const [];
+      final notifications = <UserNotification>[];
+      for (final rawNotification in list) {
+        final map = rawNotification as Map<String, dynamic>?;
+        if (map == null) {
+          continue;
+        }
+
+        final id = map['id']?.toString() ?? '';
+        maxNotificationCounter = max(maxNotificationCounter, _idCounterFromString(id, 'notif_'));
+
+        final title = _normalizeNullableText(map['title']?.toString());
+        final body = _normalizeNullableText(map['body']?.toString());
+        final type = _normalizeNullableText(map['type']?.toString());
+        final rawUsername = _normalizeNullableText(map['username']?.toString()) ?? username;
+        if (title == null || body == null || type == null) {
+          continue;
+        }
+
+        notifications.add(
+          UserNotification(
+            id: id.isEmpty ? 'notif_${maxNotificationCounter + 1}' : id,
+            username: rawUsername,
+            title: title,
+            body: body,
+            type: type,
+            relatedUsername: _normalizeNullableText(map['relatedUsername']?.toString()),
+            createdAt: _parseDateTime(map['createdAt'], DateTime.now()),
+            isRead: map['isRead'] == true,
+          ),
+        );
+      }
+      userNotifications[username] = notifications;
+    });
+    _notificationIdCounter = max(_notificationIdCounter, maxNotificationCounter + 1);
   }
 
   void sendDirectMessage({
@@ -1952,6 +2235,22 @@ class _HomePageState extends State<HomePage> {
     return locationManager.getUnreadMessageNotificationCount(_currentUsername);
   }
 
+  void _handleUpdate() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+    unawaited(locationManager.savePersistedSocialState());
+  }
+
+  Future<void> _hydratePersistedState() async {
+    await locationManager.loadPersistedSocialState();
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+  }
+
   void _openInbox() {
     Navigator.of(context)
         .push(
@@ -1959,7 +2258,7 @@ class _HomePageState extends State<HomePage> {
             builder: (_) => DirectMessagesInboxPage(
               locationManager: locationManager,
               username: _currentUsername,
-              onUpdate: () => setState(() {}),
+              onUpdate: _handleUpdate,
             ),
           ),
         )
@@ -1978,7 +2277,7 @@ class _HomePageState extends State<HomePage> {
             builder: (_) => NotificationsPage(
               locationManager: locationManager,
               username: _currentUsername,
-              onUpdate: () => setState(() {}),
+              onUpdate: _handleUpdate,
             ),
           ),
         )
@@ -2047,6 +2346,7 @@ class _HomePageState extends State<HomePage> {
       hasProAccess: widget.initialHasProAccess,
     );
     _initializeSampleData();
+    unawaited(_hydratePersistedState());
     unawaited(
       trackAnalyticsEvent(
         eventName: 'app_opened',
@@ -2347,16 +2647,16 @@ class _HomePageState extends State<HomePage> {
         return ExploreHubPage(
           locationManager: locationManager,
           username: _currentUsername,
-          onUpdate: () => setState(() {}),
+          onUpdate: _handleUpdate,
         );
       case 1:
-        return SocialPage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
+        return SocialPage(locationManager: locationManager, username: _currentUsername, onUpdate: _handleUpdate);
       case 2:
-        return DashboardPage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
+        return DashboardPage(locationManager: locationManager, username: _currentUsername, onUpdate: _handleUpdate);
       case 3:
-        return ProfilePage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
+        return ProfilePage(locationManager: locationManager, username: _currentUsername, onUpdate: _handleUpdate);
       case 4:
-        return SettingsPage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
+        return SettingsPage(locationManager: locationManager, username: _currentUsername, onUpdate: _handleUpdate);
       default:
         return Container();
     }
