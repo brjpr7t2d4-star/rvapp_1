@@ -6627,6 +6627,19 @@ class SocialPage extends StatefulWidget {
 }
 
 class _SocialPageState extends State<SocialPage> {
+  void _openPublicProfile(String profileUsername) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PublicUserProfilePage(
+          locationManager: widget.locationManager,
+          viewerUsername: widget.username,
+          profileUsername: profileUsername,
+          onUpdate: widget.onUpdate,
+        ),
+      ),
+    );
+  }
+
   bool _canViewProfileDetails(RVUser profileUser) {
     if (profileUser.username == widget.username) {
       return true;
@@ -6763,7 +6776,7 @@ class _SocialPageState extends State<SocialPage> {
             Row(
               children: [
                 InkWell(
-                  onTap: () => _showUserMiniProfile(entry.username),
+                  onTap: () => _openPublicProfile(entry.username),
                   borderRadius: BorderRadius.circular(12),
                   child: Row(
                     children: [
@@ -7348,6 +7361,13 @@ class _SocialPageState extends State<SocialPage> {
               onPressed: () => Navigator.pop(context),
               child: const Text('Close'),
             ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _openPublicProfile(profileUsername);
+              },
+              child: const Text('View Profile'),
+            ),
             if (!isOwnProfile)
               TextButton(
                 onPressed: () {
@@ -7399,6 +7419,270 @@ class _SocialPageState extends State<SocialPage> {
 
 }
 
+class PublicUserProfilePage extends StatefulWidget {
+  final RVLocationManager locationManager;
+  final String viewerUsername;
+  final String profileUsername;
+  final VoidCallback onUpdate;
+
+  const PublicUserProfilePage({
+    required this.locationManager,
+    required this.viewerUsername,
+    required this.profileUsername,
+    required this.onUpdate,
+    super.key,
+  });
+
+  @override
+  State<PublicUserProfilePage> createState() => _PublicUserProfilePageState();
+}
+
+class _PublicUserProfilePageState extends State<PublicUserProfilePage> {
+  bool _canViewDetails(RVUser profileUser) {
+    if (profileUser.username == widget.viewerUsername) {
+      return true;
+    }
+    return profileUser.preferences.showProfilePublicly;
+  }
+
+  void _toggleFollow(RVUser currentUser, RVUser profileUser) {
+    final targetUsername = profileUser.username;
+    final isFollowing = currentUser.following.contains(targetUsername);
+    final hasPendingRequest = profileUser.followRequests.contains(widget.viewerUsername);
+
+    if (isFollowing) {
+      currentUser.unfollowUser(targetUsername);
+      profileUser.removeFollower(widget.viewerUsername);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unfollowed @${profileUser.username}')),
+      );
+    } else if (hasPendingRequest) {
+      profileUser.removeFollowRequest(widget.viewerUsername);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Cancelled request to @${profileUser.username}')),
+      );
+    } else if (profileUser.preferences.requireFollowApproval) {
+      profileUser.addFollowRequest(widget.viewerUsername);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Follow request sent to @${profileUser.username}')),
+      );
+    } else {
+      currentUser.followUser(targetUsername);
+      profileUser.addFollower(widget.viewerUsername);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Now following @${profileUser.username}')),
+      );
+    }
+
+    widget.onUpdate();
+    setState(() {});
+  }
+
+  String _rvSummary(RVUser user) {
+    final parts = [user.rvYear, user.rvMake, user.rvModel]
+        .map((part) => _normalizeNullableText(part))
+        .whereType<String>()
+        .toList();
+    if (parts.isEmpty) {
+      return 'No RV details shared';
+    }
+    return parts.join(' ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profileUser = widget.locationManager.users[widget.profileUsername];
+    final currentUser = widget.locationManager.users[widget.viewerUsername];
+
+    if (profileUser == null || currentUser == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Profile')),
+        body: const Center(child: Text('Profile not found')),
+      );
+    }
+
+    final canViewDetails = _canViewDetails(profileUser);
+    final isOwnProfile = profileUser.username == currentUser.username;
+    final isFollowing = currentUser.following.contains(profileUser.username);
+    final hasPendingRequest = profileUser.followRequests.contains(widget.viewerUsername);
+    final recentAdventures = profileUser.adventures.toList()
+      ..sort((a, b) => b.date.compareTo(a.date));
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('@${profileUser.username}'),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 28,
+                          backgroundColor: Colors.orange[200],
+                          backgroundImage: (profileUser.profilePicture ?? '').trim().isNotEmpty
+                              ? NetworkImage(profileUser.profilePicture!.trim())
+                              : null,
+                          child: (profileUser.profilePicture ?? '').trim().isNotEmpty
+                              ? null
+                              : Text(profileUser.username[0].toUpperCase()),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                profileUser.username,
+                                style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                canViewDetails
+                                    ? '${profileUser.followers.length} followers • ${profileUser.following.length} following'
+                                    : '${profileUser.followers.length} followers',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      canViewDetails
+                          ? ((profileUser.bio ?? '').trim().isEmpty ? 'No bio yet.' : profileUser.bio!.trim())
+                          : 'This user has hidden their profile details.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    if (!isOwnProfile) ...[
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: ElevatedButton(
+                          onPressed: () => _toggleFollow(currentUser, profileUser),
+                          child: Text(
+                            isFollowing
+                                ? 'Unfollow'
+                                : hasPendingRequest
+                                    ? 'Cancel Request'
+                                    : profileUser.preferences.requireFollowApproval
+                                        ? 'Request Follow'
+                                        : 'Follow',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (!canViewDetails)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Text(
+                    'Only limited public data is visible for this profile.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              )
+            else ...[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('RV Details', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 6),
+                      Text(_rvSummary(profileUser)),
+                      const SizedBox(height: 10),
+                      Text(
+                        (profileUser.hometown ?? '').trim().isEmpty
+                            ? 'Hometown not shared'
+                            : 'Hometown: ${profileUser.hometown!.trim()}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (profileUser.socials.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Social Links', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: profileUser.socials.entries
+                              .map((entry) => Chip(label: Text('${entry.key}: ${entry.value}')))
+                              .toList(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Recent Posts', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 8),
+                      if (recentAdventures.isEmpty)
+                        Text('No posts yet.', style: Theme.of(context).textTheme.bodySmall)
+                      else
+                        ...recentAdventures.take(8).map((post) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(post.title, style: Theme.of(context).textTheme.titleSmall),
+                                const SizedBox(height: 4),
+                                Text(post.description),
+                                if (post.locationName.trim().isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(post.locationName, style: Theme.of(context).textTheme.bodySmall),
+                                ],
+                                _buildMediaAttachments(context, photos: post.photos, videos: post.videos),
+                                if (post != recentAdventures.take(8).last)
+                                  const Divider(height: 20),
+                              ],
+                            ),
+                          );
+                        }),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // Settings Page
 class SettingsPage extends StatefulWidget {
   final RVLocationManager locationManager;
@@ -7423,6 +7707,19 @@ class _SettingsPageState extends State<SettingsPage> {
   int _totalSignups = 0;
   int _proSignups = 0;
   Map<String, int> _dailySignups = const {};
+
+  void _openPublicProfile(String profileUsername) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PublicUserProfilePage(
+          locationManager: widget.locationManager,
+          viewerUsername: widget.username,
+          profileUsername: profileUsername,
+          onUpdate: widget.onUpdate,
+        ),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -7951,7 +8248,15 @@ class _SettingsPageState extends State<SettingsPage> {
                       child: Text(requesterName[0].toUpperCase(), style: const TextStyle(fontSize: 12)),
                     ),
                     const SizedBox(width: 10),
-                    Expanded(child: Text(requesterName)),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => _openPublicProfile(requesterName),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Text(requesterName),
+                        ),
+                      ),
+                    ),
                     TextButton(
                       onPressed: () {
                         final requesterUser = widget.locationManager.users[requesterName];
