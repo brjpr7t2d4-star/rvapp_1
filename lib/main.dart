@@ -138,6 +138,20 @@ void main() {
   runApp(const RVOwnerApp());
 }
 
+String? _normalizeNullableText(String? value) {
+  final trimmed = value?.trim();
+  if (trimmed == null || trimmed.isEmpty) {
+    return null;
+  }
+
+  final normalized = trimmed.toLowerCase();
+  if (normalized == 'null' || normalized == 'undefined' || normalized == 'n/a' || normalized == 'na') {
+    return null;
+  }
+
+  return trimmed;
+}
+
 // Data Models
 class RVLocation {
   final String id;
@@ -159,14 +173,16 @@ class RVLocation {
     required this.type,
     required this.latitude,
     required this.longitude,
-    this.address,
-    this.details,
+    String? address,
+    String? details,
     required this.addedBy,
     DateTime? createdDate,
     List<Review>? reviews,
     List<String>? photos,
     List<String>? videos,
-  })  : createdDate = createdDate ?? DateTime.now(),
+  })  : address = _normalizeNullableText(address),
+        details = _normalizeNullableText(details),
+        createdDate = createdDate ?? DateTime.now(),
         reviews = reviews ?? [],
         photos = photos ?? [],
         videos = videos ?? [];
@@ -201,13 +217,15 @@ class PendingLocationSubmission {
     required this.type,
     required this.latitude,
     required this.longitude,
-    this.address,
-    this.details,
+    String? address,
+    String? details,
     required this.submittedBy,
     DateTime? submittedAt,
     List<String>? photos,
     List<String>? videos,
-  })  : submittedAt = submittedAt ?? DateTime.now(),
+  })  : address = _normalizeNullableText(address),
+        details = _normalizeNullableText(details),
+        submittedAt = submittedAt ?? DateTime.now(),
         photos = photos ?? [],
         videos = videos ?? [];
 }
