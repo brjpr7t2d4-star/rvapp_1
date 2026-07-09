@@ -626,7 +626,7 @@ Widget _buildMediaImage(String media, {double? width, double? height, BoxFit fit
           width: width,
           height: height,
           fit: fit,
-          errorBuilder: (_, __, ___) => Container(
+          errorBuilder: (context, error, stackTrace) => Container(
             width: width,
             height: height,
             color: Colors.grey.shade200,
@@ -645,7 +645,7 @@ Widget _buildMediaImage(String media, {double? width, double? height, BoxFit fit
     width: width,
     height: height,
     fit: fit,
-    errorBuilder: (_, __, ___) => Container(
+    errorBuilder: (context, error, stackTrace) => Container(
       width: width,
       height: height,
       color: Colors.grey.shade200,
@@ -942,7 +942,7 @@ class RVOwnerApp extends StatelessWidget {
             fontSize: 16,
           ),
           bodyMedium: const TextStyle(
-            color: const Color(0xFF3B4A49),
+            color: Color(0xFF3B4A49),
             fontSize: 14,
           ),
         ),
