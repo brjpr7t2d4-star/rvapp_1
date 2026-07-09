@@ -28,6 +28,14 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Nomad Network uses your location to sort and discover nearby RV-friendly places.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Nomad Network uses your camera to let you capture photos and videos for posts and profile media.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Nomad Network uses your photo library so you can choose photos and videos for posts and profile media.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Nomad Network may save captured media to your library when you choose to do so.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Nomad Network uses your microphone when recording videos with sound.</string>
 	<key>GOOGLE_MAPS_API_KEY</key>
 	<string>YOUR_GOOGLE_MAPS_API_KEY</string>
 	<key>UIApplicationSceneManifest</key>

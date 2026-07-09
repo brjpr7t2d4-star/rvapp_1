@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart' as osm;
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart' as latlng;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
@@ -332,21 +333,7 @@ Widget _buildMediaAttachments(
             itemBuilder: (context, index) {
               return ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Image.network(
-                  photos[index],
-                  width: 110,
-                  height: 110,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) {
-                    return Container(
-                      width: 110,
-                      height: 110,
-                      color: Colors.grey[200],
-                      alignment: Alignment.center,
-                      child: Icon(Icons.broken_image, color: Colors.grey[500]),
-                    );
-                  },
-                ),
+                child: _buildMediaImage(photos[index], width: 110, height: 110),
               );
             },
           ),
@@ -369,7 +356,7 @@ Widget _buildMediaAttachments(
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    videoUrl,
+                    _mediaDisplayName(videoUrl),
                     style: Theme.of(context).textTheme.bodySmall,
                     overflow: TextOverflow.ellipsis,
                     maxLines: 2,
@@ -450,6 +437,82 @@ double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
 
 double _degreesToRadians(double degrees) {
   return degrees * pi / 180;
+}
+
+final ImagePicker _mediaPicker = ImagePicker();
+
+String _mediaDisplayName(String media) {
+  if (media.startsWith('data:image/')) {
+    return 'Selected photo';
+  }
+  if (media.startsWith('data:video/')) {
+    return 'Selected video';
+  }
+  final cleaned = media.split('?').first;
+  final segments = cleaned.split('/');
+  final lastSegment = segments.isNotEmpty ? segments.last : media;
+  return lastSegment.isEmpty ? media : lastSegment;
+}
+
+Widget _buildMediaImage(String media, {double? width, double? height, BoxFit fit = BoxFit.cover}) {
+  if (media.startsWith('data:image/')) {
+    final commaIndex = media.indexOf(',');
+    if (commaIndex > -1) {
+      final base64Part = media.substring(commaIndex + 1);
+      try {
+        return Image.memory(
+          base64Decode(base64Part),
+          width: width,
+          height: height,
+          fit: fit,
+          errorBuilder: (_, __, ___) => Container(
+            width: width,
+            height: height,
+            color: Colors.grey.shade200,
+            alignment: Alignment.center,
+            child: const Icon(Icons.broken_image),
+          ),
+        );
+      } catch (_) {
+        // Fall through to network image handling below.
+      }
+    }
+  }
+
+  return Image.network(
+    media,
+    width: width,
+    height: height,
+    fit: fit,
+    errorBuilder: (_, __, ___) => Container(
+      width: width,
+      height: height,
+      color: Colors.grey.shade200,
+      alignment: Alignment.center,
+      child: const Icon(Icons.broken_image),
+    ),
+  );
+}
+
+Future<String?> _pickMediaAttachment(ImageSource source, {required bool isVideo}) async {
+  final XFile? file = isVideo
+      ? await _mediaPicker.pickVideo(source: source)
+      : await _mediaPicker.pickImage(source: source, imageQuality: 85);
+
+  if (file == null) {
+    return null;
+  }
+
+  if (!isVideo) {
+    final bytes = await file.readAsBytes();
+    final extension = file.name.toLowerCase();
+    final mimeType = extension.endsWith('.png')
+        ? 'image/png'
+        : (extension.endsWith('.webp') ? 'image/webp' : 'image/jpeg');
+    return 'data:$mimeType;base64,${base64Encode(bytes)}';
+  }
+
+  return file.path.isNotEmpty ? file.path : file.name;
 }
 
 // Location Manager - needs to be defined before pages that use it
@@ -3122,8 +3185,8 @@ class _AddLocationPageState extends State<AddLocationPage> {
   final _detailsController = TextEditingController();
   final _latitudeController = TextEditingController();
   final _longitudeController = TextEditingController();
-  final _photoUrlsController = TextEditingController();
-  final _videoUrlsController = TextEditingController();
+  final _selectedPhotos = <String>[];
+  final _selectedVideos = <String>[];
   String _selectedType = 'Parking';
   bool _loadingCurrentLocation = false;
 
@@ -3213,19 +3276,33 @@ class _AddLocationPageState extends State<AddLocationPage> {
                   keyboardType: TextInputType.number,
                 ),
                 const SizedBox(height: 20),
-                _buildFormField(
-                  controller: _photoUrlsController,
-                  label: 'Photo URLs',
-                  icon: Icons.photo_library,
-                  hint: 'Optional photo URLs separated by commas or new lines',
-                ),
-                const SizedBox(height: 20),
-                _buildFormField(
-                  controller: _videoUrlsController,
-                  label: 'Video URLs',
-                  icon: Icons.videocam,
-                  hint: 'Optional video URLs separated by commas or new lines',
-                ),
+                _buildAttachmentButtons(),
+                if (_selectedPhotos.isNotEmpty || _selectedVideos.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Selected Media', style: Theme.of(context).textTheme.titleSmall),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ..._selectedPhotos.map(
+                        (photo) => ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: _buildMediaImage(photo, width: 72, height: 72),
+                        ),
+                      ),
+                      ..._selectedVideos.map(
+                        (video) => Chip(
+                          avatar: const Icon(Icons.videocam, size: 16),
+                          label: Text(_mediaDisplayName(video)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 32),
                 // Submit button
                 Container(
@@ -3561,8 +3638,8 @@ class _AddLocationPageState extends State<AddLocationPage> {
           widget.username,
           address: _addressController.text.isNotEmpty ? _addressController.text : null,
           details: _detailsController.text.trim().isNotEmpty ? _detailsController.text.trim() : null,
-          photos: _parseMediaUrls(_photoUrlsController.text),
-          videos: _parseMediaUrls(_videoUrlsController.text),
+          photos: _selectedPhotos,
+          videos: _selectedVideos,
         );
       } else {
         widget.locationManager.submitLocationForApproval(
@@ -3573,8 +3650,8 @@ class _AddLocationPageState extends State<AddLocationPage> {
           widget.username,
           address: _addressController.text.isNotEmpty ? _addressController.text : null,
           details: _detailsController.text.trim().isNotEmpty ? _detailsController.text.trim() : null,
-          photos: _parseMediaUrls(_photoUrlsController.text),
-          videos: _parseMediaUrls(_videoUrlsController.text),
+          photos: _selectedPhotos,
+          videos: _selectedVideos,
         );
       }
 
@@ -3583,8 +3660,8 @@ class _AddLocationPageState extends State<AddLocationPage> {
       _detailsController.clear();
       _latitudeController.clear();
       _longitudeController.clear();
-      _photoUrlsController.clear();
-      _videoUrlsController.clear();
+      _selectedPhotos.clear();
+      _selectedVideos.clear();
       _selectedType = 'Parking';
       widget.onUpdate();
 
@@ -3614,6 +3691,84 @@ class _AddLocationPageState extends State<AddLocationPage> {
     }
   }
 
+  Widget _buildAttachmentButtons() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.photo_library, size: 18, color: Color(0xFF1B5E4B)),
+            const SizedBox(width: 8),
+            Text(
+              'Media Attachments',
+              style: const TextStyle(
+                color: Color(0xFF1B5E4B),
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final media = await _pickMediaAttachment(ImageSource.gallery, isVideo: false);
+                  if (media == null) return;
+                  setState(() => _selectedPhotos.add(media));
+                },
+                icon: const Icon(Icons.photo_library),
+                label: const Text('Photo Gallery'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final media = await _pickMediaAttachment(ImageSource.camera, isVideo: false);
+                  if (media == null) return;
+                  setState(() => _selectedPhotos.add(media));
+                },
+                icon: const Icon(Icons.photo_camera),
+                label: const Text('Camera'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final media = await _pickMediaAttachment(ImageSource.gallery, isVideo: true);
+                  if (media == null) return;
+                  setState(() => _selectedVideos.add(media));
+                },
+                icon: const Icon(Icons.video_library),
+                label: const Text('Video Gallery'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final media = await _pickMediaAttachment(ImageSource.camera, isVideo: true);
+                  if (media == null) return;
+                  setState(() => _selectedVideos.add(media));
+                },
+                icon: const Icon(Icons.videocam),
+                label: const Text('Record Video'),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   @override
   void dispose() {
     _nameController.dispose();
@@ -3621,8 +3776,6 @@ class _AddLocationPageState extends State<AddLocationPage> {
     _detailsController.dispose();
     _latitudeController.dispose();
     _longitudeController.dispose();
-    _photoUrlsController.dispose();
-    _videoUrlsController.dispose();
     super.dispose();
   }
 }
@@ -5442,19 +5595,7 @@ class _ProfilePageState extends State<ProfilePage> {
                             children: [
                               ClipRRect(
                                 borderRadius: BorderRadius.circular(10),
-                                child: Image.network(
-                                  url,
-                                  width: 140,
-                                  height: 110,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => Container(
-                                    width: 140,
-                                    height: 110,
-                                    color: Colors.grey.shade200,
-                                    alignment: Alignment.center,
-                                    child: const Icon(Icons.broken_image),
-                                  ),
-                                ),
+                                child: _buildMediaImage(url, width: 140, height: 110),
                               ),
                               Positioned(
                                 right: 4,
@@ -5658,37 +5799,52 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   void _showAddMediaDialog(RVUser user, {required String mediaType}) {
-    final controller = TextEditingController();
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text('Add ${mediaType == 'photo' ? 'Photo' : 'Video'} URL'),
-        content: TextField(
-          controller: controller,
-          decoration: InputDecoration(
-            hintText: mediaType == 'photo' ? 'https://example.com/photo.jpg' : 'https://youtube.com/watch?v=...',
-            border: const OutlineInputBorder(),
-          ),
-        ),
+        title: Text('Add ${mediaType == 'photo' ? 'Photo' : 'Video'}'),
+        content: const Text('Choose a source to attach media from your device.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              final value = controller.text.trim();
-              if (value.isEmpty) {
+          TextButton(
+            onPressed: () async {
+              final media = await _pickMediaAttachment(ImageSource.gallery, isVideo: mediaType == 'video');
+              if (media == null) {
                 return;
               }
               setState(() {
                 if (mediaType == 'photo') {
-                  user.addPhoto(value);
+                  user.addPhoto(media);
                 } else {
-                  user.addVideo(value);
+                  user.addVideo(media);
                 }
               });
               widget.onUpdate();
-              Navigator.pop(context);
+              if (mounted) {
+                Navigator.pop(context);
+              }
             },
-            child: const Text('Add'),
+            child: const Text('Gallery'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final media = await _pickMediaAttachment(ImageSource.camera, isVideo: mediaType == 'video');
+              if (media == null) {
+                return;
+              }
+              setState(() {
+                if (mediaType == 'photo') {
+                  user.addPhoto(media);
+                } else {
+                  user.addVideo(media);
+                }
+              });
+              widget.onUpdate();
+              if (mounted) {
+                Navigator.pop(context);
+              }
+            },
+            child: Text(mediaType == 'photo' ? 'Camera' : 'Record'),
           ),
         ],
       ),
@@ -6336,110 +6492,174 @@ class _SocialPageState extends State<SocialPage> {
     final titleController = TextEditingController();
     final descriptionController = TextEditingController();
     final locationController = TextEditingController();
-    final photoUrlsController = TextEditingController();
-    final videoUrlsController = TextEditingController();
+    final selectedPhotos = <String>[];
+    final selectedVideos = <String>[];
 
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Post Update'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: titleController,
-                  decoration: const InputDecoration(
-                    labelText: 'Headline',
-                    border: OutlineInputBorder(),
-                    hintText: 'Sunset at the lake',
-                  ),
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> addAttachment({required bool isVideo, required ImageSource source}) async {
+              final media = await _pickMediaAttachment(source, isVideo: isVideo);
+              if (media == null) {
+                return;
+              }
+              setDialogState(() {
+                if (isVideo) {
+                  selectedVideos.add(media);
+                } else {
+                  selectedPhotos.add(media);
+                }
+              });
+            }
+
+            return AlertDialog(
+              title: const Text('Post Update'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: titleController,
+                      decoration: const InputDecoration(
+                        labelText: 'Headline',
+                        border: OutlineInputBorder(),
+                        hintText: 'Sunset at the lake',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descriptionController,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Update',
+                        border: OutlineInputBorder(),
+                        hintText: 'Share what is happening on the road...',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: locationController,
+                      decoration: const InputDecoration(
+                        labelText: 'Location',
+                        border: OutlineInputBorder(),
+                        hintText: 'Optional',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => addAttachment(isVideo: false, source: ImageSource.gallery),
+                            icon: const Icon(Icons.photo_library),
+                            label: const Text('Photo Gallery'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => addAttachment(isVideo: false, source: ImageSource.camera),
+                            icon: const Icon(Icons.photo_camera),
+                            label: const Text('Camera'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => addAttachment(isVideo: true, source: ImageSource.gallery),
+                            icon: const Icon(Icons.video_library),
+                            label: const Text('Video Gallery'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => addAttachment(isVideo: true, source: ImageSource.camera),
+                            icon: const Icon(Icons.videocam),
+                            label: const Text('Record Video'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (selectedPhotos.isNotEmpty || selectedVideos.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('Attachments', style: Theme.of(context).textTheme.titleSmall),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          ...selectedPhotos.map(
+                            (photo) => ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: _buildMediaImage(photo, width: 72, height: 72),
+                            ),
+                          ),
+                          ...selectedVideos.map(
+                            (video) => Chip(
+                              avatar: const Icon(Icons.videocam, size: 16),
+                              label: Text(_mediaDisplayName(video)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: descriptionController,
-                  maxLines: 4,
-                  decoration: const InputDecoration(
-                    labelText: 'Update',
-                    border: OutlineInputBorder(),
-                    hintText: 'Share what is happening on the road...',
-                  ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: locationController,
-                  decoration: const InputDecoration(
-                    labelText: 'Location',
-                    border: OutlineInputBorder(),
-                    hintText: 'Optional',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: photoUrlsController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'Photo URLs',
-                    border: OutlineInputBorder(),
-                    hintText: 'Optional photo URLs separated by commas or new lines',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: videoUrlsController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'Video URLs',
-                    border: OutlineInputBorder(),
-                    hintText: 'Optional video URLs separated by commas or new lines',
-                  ),
+                TextButton(
+                  onPressed: () {
+                    final headline = titleController.text.trim();
+                    final description = descriptionController.text.trim();
+                    final locationName = locationController.text.trim();
+
+                    if (description.isEmpty) {
+                      ScaffoldMessenger.of(this.context).showSnackBar(
+                        const SnackBar(content: Text('Add some text to your update.')),
+                      );
+                      return;
+                    }
+
+                    currentUser.addAdventure(
+                      Adventure(
+                        id: DateTime.now().millisecondsSinceEpoch.toString(),
+                        title: headline.isEmpty ? 'Status Update' : headline,
+                        description: description,
+                        locationName: locationName,
+                        date: DateTime.now(),
+                        photos: selectedPhotos,
+                        videos: selectedVideos,
+                        rating: 0,
+                      ),
+                    );
+
+                    widget.onUpdate();
+                    Navigator.pop(context);
+                    setState(() {});
+
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(content: Text('Update posted!')),
+                    );
+                  },
+                  child: const Text('Post'),
                 ),
               ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () {
-                final headline = titleController.text.trim();
-                final description = descriptionController.text.trim();
-                final locationName = locationController.text.trim();
-
-                if (description.isEmpty) {
-                  ScaffoldMessenger.of(this.context).showSnackBar(
-                    const SnackBar(content: Text('Add some text to your update.')),
-                  );
-                  return;
-                }
-
-                currentUser.addAdventure(
-                  Adventure(
-                    id: DateTime.now().millisecondsSinceEpoch.toString(),
-                    title: headline.isEmpty ? 'Status Update' : headline,
-                    description: description,
-                    locationName: locationName,
-                    date: DateTime.now(),
-                    photos: _parseMediaUrls(photoUrlsController.text),
-                    videos: _parseMediaUrls(videoUrlsController.text),
-                    rating: 0,
-                  ),
-                );
-
-                widget.onUpdate();
-                Navigator.pop(context);
-                setState(() {});
-
-                ScaffoldMessenger.of(this.context).showSnackBar(
-                  const SnackBar(content: Text('Update posted!')),
-                );
-              },
-              child: const Text('Post'),
-            ),
-          ],
+            );
+          },
         );
       },
     );
@@ -6456,8 +6676,8 @@ class _SocialPageState extends State<SocialPage> {
     final notesController = TextEditingController();
     final latitudeController = TextEditingController();
     final longitudeController = TextEditingController();
-    final photoUrlsController = TextEditingController();
-    final videoUrlsController = TextEditingController();
+    final selectedPhotos = <String>[];
+    final selectedVideos = <String>[];
     String selectedType = 'Parking';
 
     showDialog(
@@ -6465,6 +6685,20 @@ class _SocialPageState extends State<SocialPage> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
+            Future<void> addAttachment({required bool isVideo, required ImageSource source}) async {
+              final media = await _pickMediaAttachment(source, isVideo: isVideo);
+              if (media == null) {
+                return;
+              }
+              setDialogState(() {
+                if (isVideo) {
+                  selectedVideos.add(media);
+                } else {
+                  selectedPhotos.add(media);
+                }
+              });
+            }
+
             return AlertDialog(
               title: const Text('Submit Pin Drop'),
               content: SingleChildScrollView(
@@ -6531,25 +6765,71 @@ class _SocialPageState extends State<SocialPage> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    TextField(
-                      controller: photoUrlsController,
-                      maxLines: 2,
-                      decoration: const InputDecoration(
-                        labelText: 'Photo URLs',
-                        border: OutlineInputBorder(),
-                        hintText: 'Optional photo URLs separated by commas or new lines',
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => addAttachment(isVideo: false, source: ImageSource.gallery),
+                            icon: const Icon(Icons.photo_library),
+                            label: const Text('Photo Gallery'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => addAttachment(isVideo: false, source: ImageSource.camera),
+                            icon: const Icon(Icons.photo_camera),
+                            label: const Text('Camera'),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: videoUrlsController,
-                      maxLines: 2,
-                      decoration: const InputDecoration(
-                        labelText: 'Video URLs',
-                        border: OutlineInputBorder(),
-                        hintText: 'Optional video URLs separated by commas or new lines',
-                      ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => addAttachment(isVideo: true, source: ImageSource.gallery),
+                            icon: const Icon(Icons.video_library),
+                            label: const Text('Video Gallery'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => addAttachment(isVideo: true, source: ImageSource.camera),
+                            icon: const Icon(Icons.videocam),
+                            label: const Text('Record Video'),
+                          ),
+                        ),
+                      ],
                     ),
+                    if (selectedPhotos.isNotEmpty || selectedVideos.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('Attachments', style: Theme.of(context).textTheme.titleSmall),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          ...selectedPhotos.map(
+                            (photo) => ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: _buildMediaImage(photo, width: 72, height: 72),
+                            ),
+                          ),
+                          ...selectedVideos.map(
+                            (video) => Chip(
+                              avatar: const Icon(Icons.videocam, size: 16),
+                              label: Text(_mediaDisplayName(video)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -6574,8 +6854,8 @@ class _SocialPageState extends State<SocialPage> {
                     try {
                       final latitude = double.parse(latitudeController.text.trim());
                       final longitude = double.parse(longitudeController.text.trim());
-                      final photos = _parseMediaUrls(photoUrlsController.text);
-                      final videos = _parseMediaUrls(videoUrlsController.text);
+                      final photos = selectedPhotos;
+                      final videos = selectedVideos;
 
                       widget.locationManager.submitLocationForApproval(
                         name,
