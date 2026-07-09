@@ -5,17 +5,38 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Flutter iPhone Debug (Google Key)",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart",
+            "deviceId": "00008150-000234891A87401C",
+            "toolArgs": [
+                "--dart-define=GOOGLE_MAPS_API_KEY=YOUR_GOOGLE_MAPS_API_KEY"
+            ]
+        },
+        {
+            "name": "Flutter iPhone Release (Google Key)",
+            "type": "dart",
+            "request": "launch",
+            "flutterMode": "release",
+            "program": "lib/main.dart",
+            "deviceId": "00008150-000234891A87401C",
+            "toolArgs": [
+                "--dart-define=GOOGLE_MAPS_API_KEY=YOUR_GOOGLE_MAPS_API_KEY"
+            ]
+        },
+        {
             "name": "Flutter: Run all Tests",
             "type": "dart",
             "request": "launch",
             "program": "./test/"
         },
-    {
-        "name": "Flutter",
-        "type": "dart",
-        "request": "launch",
-        "program": "lib/main.dart"
-    },
+        {
+            "name": "Flutter",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart"
+        },
         {
             "type": "node",
             "request": "launch",

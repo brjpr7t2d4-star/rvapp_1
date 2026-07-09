@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geocoding/geocoding.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map/flutter_map.dart' as osm;
 import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:http/http.dart' as http;
-import 'package:latlong2/latlong.dart';
+import 'package:latlong2/latlong.dart' as latlng;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
 const bool kSeedSampleLocations = false;
+const String kGoogleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
+
+bool get hasGoogleMapsApiKey => kGoogleMapsApiKey.trim().isNotEmpty;
 
 void main() {
   runApp(const RVOwnerApp());
@@ -108,6 +112,8 @@ class Review {
 
 class RVUser {
   final String username;
+  final String? email;
+  final String? password;
   final List<Review> reviews;
   int locationsAdded;
   String? rvMake;
@@ -117,13 +123,29 @@ class RVUser {
   final List<String> followers; // Users following this user
   final List<Adventure> adventures;
   final List<String> photos; // Photo URLs/paths
+  final List<String> videos; // Video URLs/paths
   final List<String> followRequests; // Usernames requesting to follow
   UserPreferences preferences;
   String? profilePicture; // Profile picture URL
   String? bio; // User bio
+  String? hometown; // User hometown
   Map<String, String> socials; // Social media links (platform -> handle/url)
+  double? rigHeightFt;
+  double? rigWeightLbs;
+  double? rigLengthFt;
+  bool isTowing;
+  bool hasProAccess;
 
-  RVUser({required this.username})
+  RVUser({
+    required this.username,
+    this.email,
+    this.password,
+    this.rigHeightFt,
+    this.rigWeightLbs,
+    this.rigLengthFt,
+    this.isTowing = false,
+    this.hasProAccess = false,
+  })
       : reviews = [],
         locationsAdded = 0,
         rvMake = null,
@@ -133,10 +155,12 @@ class RVUser {
         followers = [],
         adventures = [],
         photos = [],
+        videos = [],
         followRequests = [],
         preferences = UserPreferences(),
         profilePicture = null,
         bio = null,
+        hometown = null,
         socials = {};
 
   void addReview(Review review) {
@@ -198,6 +222,10 @@ class RVUser {
     bio = newBio;
   }
 
+  void updateHometown(String newHometown) {
+    hometown = newHometown;
+  }
+
   void updateProfilePicture(String picturePath) {
     profilePicture = picturePath;
   }
@@ -206,8 +234,28 @@ class RVUser {
     socials[platform] = handle;
   }
 
+  void addVideo(String videoPath) {
+    videos.add(videoPath);
+  }
+
   void removeSocial(String platform) {
     socials.remove(platform);
+  }
+
+  void updateVehicleProfile({
+    required double heightFt,
+    required double weightLbs,
+    required double lengthFt,
+    required bool towing,
+  }) {
+    rigHeightFt = heightFt;
+    rigWeightLbs = weightLbs;
+    rigLengthFt = lengthFt;
+    isTowing = towing;
+  }
+
+  void updateSubscription(bool proAccess) {
+    hasProAccess = proAccess;
   }
 }
 
@@ -339,6 +387,7 @@ class UserPreferences {
   bool showWeatherAlerts;
   bool showRoadConditions;
   bool shareLocation;
+  bool showProfilePublicly;
   bool allowMessages;
   bool requireFollowApproval;
   String? preferredMap; // 'standard', 'satellite', 'terrain'
@@ -350,12 +399,13 @@ class UserPreferences {
     this.showWeatherAlerts = true,
     this.showRoadConditions = true,
     this.shareLocation = false,
+    this.showProfilePublicly = true,
     this.allowMessages = true,
     this.requireFollowApproval = false,
     this.preferredMap = 'standard',
     List<String>? favoriteLocationTypes,
     this.coordinateFormat = 'decimal',
-    this.distanceUnit = 'km',
+    this.distanceUnit = 'miles',
   }) : favoriteLocationTypes = favoriteLocationTypes ?? ['Camping', 'Parking'];
 }
 
@@ -409,9 +459,27 @@ class RVLocationManager {
   int _idCounter = 0;
   int _pendingIdCounter = 0;
 
-  void createUser(String username) {
+  void createUser(
+    String username, {
+    String? email,
+    String? password,
+    double? rigHeightFt,
+    double? rigWeightLbs,
+    double? rigLengthFt,
+    bool isTowing = false,
+    bool hasProAccess = false,
+  }) {
     if (!users.containsKey(username)) {
-      users[username] = RVUser(username: username);
+      users[username] = RVUser(
+        username: username,
+        email: email,
+        password: password,
+        rigHeightFt: rigHeightFt,
+        rigWeightLbs: rigWeightLbs,
+        rigLengthFt: rigLengthFt,
+        isTowing: isTowing,
+        hasProAccess: hasProAccess,
+      );
     }
   }
 
@@ -676,6 +744,13 @@ class _AppEntryPageState extends State<AppEntryPage> {
   bool _isLoading = true;
   bool _needsOnboarding = true;
   String _username = 'CurrentUser';
+  String? _email;
+  String? _password;
+  double? _rigHeightFt;
+  double? _rigWeightLbs;
+  double? _rigLengthFt;
+  bool _isTowing = false;
+  bool _hasProAccess = false;
 
   @override
   void initState() {
@@ -687,6 +762,13 @@ class _AppEntryPageState extends State<AppEntryPage> {
     final prefs = await SharedPreferences.getInstance();
     final onboardingDone = prefs.getBool('onboarding_done') ?? false;
     final storedUsername = prefs.getString('username');
+    final storedEmail = prefs.getString('email');
+    final storedPassword = prefs.getString('password');
+    final storedRigHeightFt = prefs.getDouble('rig_height_ft');
+    final storedRigWeightLbs = prefs.getDouble('rig_weight_lbs');
+    final storedRigLengthFt = prefs.getDouble('rig_length_ft');
+    final storedIsTowing = prefs.getBool('is_towing') ?? false;
+    final storedHasProAccess = prefs.getBool('has_pro_access') ?? false;
 
     if (!mounted) {
       return;
@@ -697,17 +779,32 @@ class _AppEntryPageState extends State<AppEntryPage> {
       _username = storedUsername?.trim().isNotEmpty == true
           ? storedUsername!.trim()
           : 'CurrentUser';
+      _email = storedEmail?.trim().isNotEmpty == true ? storedEmail!.trim() : null;
+      _password = storedPassword?.trim().isNotEmpty == true ? storedPassword!.trim() : null;
+      _rigHeightFt = storedRigHeightFt;
+      _rigWeightLbs = storedRigWeightLbs;
+      _rigLengthFt = storedRigLengthFt;
+      _isTowing = storedIsTowing;
+      _hasProAccess = storedHasProAccess;
       _isLoading = false;
     });
   }
 
-  Future<void> _completeOnboarding(String username) async {
-    final trimmed = username.trim();
-    final selectedUsername = trimmed.isEmpty ? 'CurrentUser' : trimmed;
+  Future<void> _completeOnboarding(SignupResult signup) async {
+    final selectedUsername = signup.username.trim().isEmpty
+        ? 'CurrentUser'
+        : signup.username.trim();
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('onboarding_done', true);
     await prefs.setString('username', selectedUsername);
+    await prefs.setString('email', signup.email.trim());
+    await prefs.setString('password', signup.password);
+    await prefs.setDouble('rig_height_ft', signup.rigHeightFt);
+    await prefs.setDouble('rig_weight_lbs', signup.rigWeightLbs);
+    await prefs.setDouble('rig_length_ft', signup.rigLengthFt);
+    await prefs.setBool('is_towing', signup.isTowing);
+    await prefs.setBool('has_pro_access', signup.hasProAccess);
 
     if (!mounted) {
       return;
@@ -715,8 +812,30 @@ class _AppEntryPageState extends State<AppEntryPage> {
 
     setState(() {
       _username = selectedUsername;
+      _email = signup.email.trim();
+      _password = signup.password;
+      _rigHeightFt = signup.rigHeightFt;
+      _rigWeightLbs = signup.rigWeightLbs;
+      _rigLengthFt = signup.rigLengthFt;
+      _isTowing = signup.isTowing;
+      _hasProAccess = signup.hasProAccess;
       _needsOnboarding = false;
     });
+  }
+
+  Future<void> _continueAsGuest() async {
+    await _completeOnboarding(
+      const SignupResult(
+        username: 'CurrentUser',
+        email: 'guest@nomad.local',
+        password: 'guest-mode',
+        rigHeightFt: 12.0,
+        rigWeightLbs: 18000,
+        rigLengthFt: 32.0,
+        isTowing: false,
+        hasProAccess: false,
+      ),
+    );
   }
 
   @override
@@ -729,18 +848,49 @@ class _AppEntryPageState extends State<AppEntryPage> {
 
     if (_needsOnboarding) {
       return WelcomePage(
-        onContinueAsGuest: () => _completeOnboarding('CurrentUser'),
+        onContinueAsGuest: _continueAsGuest,
         onSignup: _completeOnboarding,
       );
     }
 
-    return HomePage(initialUsername: _username);
+    return HomePage(
+      initialUsername: _username,
+      initialEmail: _email,
+      initialPassword: _password,
+      initialRigHeightFt: _rigHeightFt,
+      initialRigWeightLbs: _rigWeightLbs,
+      initialRigLengthFt: _rigLengthFt,
+      initialIsTowing: _isTowing,
+      initialHasProAccess: _hasProAccess,
+    );
   }
+}
+
+class SignupResult {
+  final String username;
+  final String email;
+  final String password;
+  final double rigHeightFt;
+  final double rigWeightLbs;
+  final double rigLengthFt;
+  final bool isTowing;
+  final bool hasProAccess;
+
+  const SignupResult({
+    required this.username,
+    required this.email,
+    required this.password,
+    required this.rigHeightFt,
+    required this.rigWeightLbs,
+    required this.rigLengthFt,
+    required this.isTowing,
+    required this.hasProAccess,
+  });
 }
 
 class WelcomePage extends StatelessWidget {
   final VoidCallback onContinueAsGuest;
-  final ValueChanged<String> onSignup;
+  final ValueChanged<SignupResult> onSignup;
 
   const WelcomePage({
     required this.onContinueAsGuest,
@@ -749,12 +899,12 @@ class WelcomePage extends StatelessWidget {
   });
 
   Future<void> _openSignup(BuildContext context) async {
-    final username = await Navigator.of(context).push<String>(
+    final result = await Navigator.of(context).push<SignupResult>(
       MaterialPageRoute(builder: (_) => const SignupPage()),
     );
 
-    if (username != null && username.trim().isNotEmpty) {
-      onSignup(username);
+    if (result != null && result.username.trim().isNotEmpty) {
+      onSignup(result);
     }
   }
 
@@ -841,16 +991,37 @@ class SignupPage extends StatefulWidget {
 
 class _SignupPageState extends State<SignupPage> {
   final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController = TextEditingController();
+  final TextEditingController _rigHeightController = TextEditingController();
+  final TextEditingController _rigWeightController = TextEditingController();
+  final TextEditingController _rigLengthController = TextEditingController();
+  bool _isTowing = false;
+  bool _startWithPro = false;
   String? _errorText;
 
   @override
   void dispose() {
     _usernameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    _rigHeightController.dispose();
+    _rigWeightController.dispose();
+    _rigLengthController.dispose();
     super.dispose();
   }
 
   void _submit() {
     final username = _usernameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+    final confirmPassword = _confirmPasswordController.text;
+    final rigHeightFt = double.tryParse(_rigHeightController.text.trim());
+    final rigWeightLbs = double.tryParse(_rigWeightController.text.trim());
+    final rigLengthFt = double.tryParse(_rigLengthController.text.trim());
+
     if (username.length < 3) {
       setState(() {
         _errorText = 'Username must be at least 3 characters';
@@ -858,7 +1029,65 @@ class _SignupPageState extends State<SignupPage> {
       return;
     }
 
-    Navigator.of(context).pop(username);
+    final emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+    if (!emailPattern.hasMatch(email)) {
+      setState(() {
+        _errorText = 'Enter a valid email address';
+      });
+      return;
+    }
+
+    if (password.length < 8) {
+      setState(() {
+        _errorText = 'Password must be at least 8 characters';
+      });
+      return;
+    }
+
+    if (password != confirmPassword) {
+      setState(() {
+        _errorText = 'Passwords do not match';
+      });
+      return;
+    }
+
+    if (rigHeightFt == null || rigHeightFt <= 0) {
+      setState(() {
+        _errorText = 'Enter a valid rig height in feet';
+      });
+      return;
+    }
+
+    if (rigWeightLbs == null || rigWeightLbs <= 0) {
+      setState(() {
+        _errorText = 'Enter a valid rig weight in lbs';
+      });
+      return;
+    }
+
+    if (rigLengthFt == null || rigLengthFt <= 0) {
+      setState(() {
+        _errorText = 'Enter a valid rig length in feet';
+      });
+      return;
+    }
+
+    setState(() {
+      _errorText = null;
+    });
+
+    Navigator.of(context).pop(
+      SignupResult(
+        username: username,
+        email: email,
+        password: password,
+        rigHeightFt: rigHeightFt,
+        rigWeightLbs: rigWeightLbs,
+        rigLengthFt: rigLengthFt,
+        isTowing: _isTowing,
+        hasProAccess: _startWithPro,
+      ),
+    );
   }
 
   @override
@@ -871,20 +1100,108 @@ class _SignupPageState extends State<SignupPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Pick a username to get started.',
+              'Create your account and set your basic RV profile for safer routing.',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 14),
             TextField(
               controller: _usernameController,
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) => _submit(),
+              textInputAction: TextInputAction.next,
               decoration: InputDecoration(
                 labelText: 'Username',
                 hintText: 'e.g. RoadNomad',
-                errorText: _errorText,
                 border: const OutlineInputBorder(),
               ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: 'Email',
+                hintText: 'you@example.com',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordController,
+              obscureText: true,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: 'Password',
+                hintText: 'At least 8 characters',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _confirmPasswordController,
+              obscureText: true,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) {},
+              decoration: InputDecoration(
+                labelText: 'Confirm Password',
+                border: const OutlineInputBorder(),
+                errorText: _errorText,
+              ),
+            ),
+            const SizedBox(height: 18),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Vehicle Profile Setup',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _rigHeightController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: 'Rig Height (ft)',
+                hintText: 'e.g. 12.8',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _rigWeightController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: 'Rig Weight (lbs)',
+                hintText: 'e.g. 18000',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _rigLengthController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit(),
+              decoration: const InputDecoration(
+                labelText: 'Rig Length (ft)',
+                hintText: 'e.g. 34.5',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _isTowing,
+              onChanged: (value) => setState(() => _isTowing = value),
+              title: const Text('Towing a vehicle'),
+              subtitle: const Text('Used by RV-safe routing checks'),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _startWithPro,
+              onChanged: (value) => setState(() => _startWithPro = value),
+              title: const Text('Start with Pro plan'),
+              subtitle: const Text('Unlock advanced routing sequence and full offline cache regions'),
             ),
             const SizedBox(height: 16),
             ElevatedButton(
@@ -967,8 +1284,25 @@ class _SignInPageState extends State<SignInPage> {
 // Home Page with Tab Navigation
 class HomePage extends StatefulWidget {
   final String initialUsername;
+  final String? initialEmail;
+  final String? initialPassword;
+  final double? initialRigHeightFt;
+  final double? initialRigWeightLbs;
+  final double? initialRigLengthFt;
+  final bool initialIsTowing;
+  final bool initialHasProAccess;
 
-  const HomePage({super.key, required this.initialUsername});
+  const HomePage({
+    super.key,
+    required this.initialUsername,
+    this.initialEmail,
+    this.initialPassword,
+    this.initialRigHeightFt,
+    this.initialRigWeightLbs,
+    this.initialRigLengthFt,
+    this.initialIsTowing = false,
+    this.initialHasProAccess = false,
+  });
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -976,7 +1310,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   late RVLocationManager locationManager;
-  int _selectedIndex = 2;
+  int _selectedIndex = 1;
   late final String _currentUsername;
 
   @override
@@ -984,31 +1318,44 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _currentUsername = widget.initialUsername;
     locationManager = RVLocationManager();
-    locationManager.createUser(_currentUsername);
+    locationManager.createUser(
+      _currentUsername,
+      email: widget.initialEmail,
+      password: widget.initialPassword,
+      rigHeightFt: widget.initialRigHeightFt,
+      rigWeightLbs: widget.initialRigWeightLbs,
+      rigLengthFt: widget.initialRigLengthFt,
+      isTowing: widget.initialIsTowing,
+      hasProAccess: widget.initialHasProAccess,
+    );
     _initializeSampleData();
   }
 
   void _initializeSampleData() {
     // Create sample users
-    locationManager.createUser('Admin');
+    locationManager.createUser('Admin', hasProAccess: true);
     locationManager.createUser('Alice123');
-    locationManager.createUser('Bob456');
+    locationManager.createUser('Bob456', hasProAccess: true);
 
     // Add RV info and profile info to users
     final admin = locationManager.users['Admin'];
     admin?.updateBio('Full-time RVer exploring the USA 🚐');
+    admin?.updateHometown('Austin, TX');
     admin?.addSocial('Instagram', '@adminrv');
     admin?.addPhoto('https://images.unsplash.com/photo-1464207687429-7505649dae38?w=300');
     admin?.addPhoto('https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=300');
+    admin?.addVideo('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
 
     final alice = locationManager.users['Alice123'];
     alice?.updateRVInfo('Winnebago', 'Minnie Winnie', '2022');
     alice?.updateBio('Love camping and mountain views 🏕️ with my Winnie!');
+    alice?.updateHometown('Boise, ID');
     alice?.addSocial('Instagram', '@alice.adventures');
     alice?.addSocial('Twitter', '@alice_rv');
     alice?.addPhoto('https://images.unsplash.com/photo-1516886657613-9f3515b0c78f?w=300');
     alice?.addPhoto('https://images.unsplash.com/photo-1437522292490-8e18b1f6f5f6?w=300');
     alice?.addPhoto('https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=300');
+    alice?.addVideo('https://www.youtube.com/watch?v=3GwjfUFyY6M');
     alice?.addAdventure(Adventure(
       id: '1',
       title: 'Yosemite Adventure',
@@ -1025,10 +1372,12 @@ class _HomePageState extends State<HomePage> {
     final bob = locationManager.users['Bob456'];
     bob?.updateRVInfo('Forest River', 'Salem', '2020');
     bob?.updateBio('Road trip enthusiast 🛣️ | Sharing my travels one mile at a time');
+    bob?.updateHometown('Nashville, TN');
     bob?.addSocial('Instagram', '@bob.travels');
     bob?.addSocial('Facebook', 'Bob RV Adventures');
     bob?.addPhoto('https://images.unsplash.com/photo-1511884642898-4c92249e20b6?w=300');
     bob?.addPhoto('https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=300');
+    bob?.addVideo('https://www.youtube.com/watch?v=oHg5SJYRHA0');
     bob?.addAdventure(Adventure(
       id: '2',
       title: 'Rocky Mountains Escape',
@@ -1045,6 +1394,8 @@ class _HomePageState extends State<HomePage> {
     bob?.followUser('Admin');
     admin?.addFollower('Bob456');
     alice?.addFollower('Admin');
+
+    _seedCuratedPoiDatabase();
 
     if (kSeedSampleLocations) {
       // Add sample locations
@@ -1103,6 +1454,62 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _seedCuratedPoiDatabase() {
+    final curated = <Map<String, dynamic>>[
+      {
+        'name': 'Sunset Ridge RV Park',
+        'type': 'RV Park',
+        'latitude': 33.5806,
+        'longitude': -112.2374,
+        'address': 'Peoria, AZ',
+        'details': 'Verified RV park with pull-through sites and full hookups.',
+      },
+      {
+        'name': 'Red Basin BLM Boondocking',
+        'type': 'BLM Boondocking',
+        'latitude': 35.1983,
+        'longitude': -111.6513,
+        'address': 'Coconino County, AZ',
+        'details': 'Verified free BLM dispersed camping area with wide RV turn access.',
+      },
+      {
+        'name': 'Cedar Junction Dump Station',
+        'type': 'Dump Station',
+        'latitude': 36.1699,
+        'longitude': -115.1398,
+        'address': 'Las Vegas, NV',
+        'details': 'Verified dump station with fresh water fill and easy entry for Class A rigs.',
+      },
+      {
+        'name': 'Mesa Travel Propane Refill',
+        'type': 'Propane Refill',
+        'latitude': 33.4152,
+        'longitude': -111.8315,
+        'address': 'Mesa, AZ',
+        'details': 'Verified propane refill point. Route note: avoid downtown tunnel when carrying propane.',
+      },
+    ];
+
+    for (final item in curated) {
+      final exists = locationManager.locations.any(
+        (location) => location.name == item['name'] && location.type == item['type'],
+      );
+      if (exists) {
+        continue;
+      }
+
+      locationManager.addRVLocation(
+        item['name'] as String,
+        item['type'] as String,
+        item['latitude'] as double,
+        item['longitude'] as double,
+        'Admin',
+        address: item['address'] as String,
+        details: item['details'] as String,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1142,12 +1549,8 @@ class _HomePageState extends State<HomePage> {
               },
               destinations: const [
                 NavigationDestination(
-                  icon: Icon(Icons.location_on),
-                  label: 'Locations',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.map),
-                  label: 'Map',
+                  icon: Icon(Icons.explore),
+                  label: 'Explore',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.home),
@@ -1156,6 +1559,10 @@ class _HomePageState extends State<HomePage> {
                 NavigationDestination(
                   icon: Icon(Icons.people),
                   label: 'Social',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.account_circle),
+                  label: 'Profile',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.settings),
@@ -1172,18 +1579,85 @@ class _HomePageState extends State<HomePage> {
   Widget _getSelectedPage() {
     switch (_selectedIndex) {
       case 0:
-        return LocationsExplorePage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
+        return ExploreHubPage(
+          locationManager: locationManager,
+          username: _currentUsername,
+          onUpdate: () => setState(() {}),
+        );
       case 1:
-        return MapWeatherPage(locationManager: locationManager, username: _currentUsername);
-      case 2:
         return DashboardPage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
-      case 3:
+      case 2:
         return SocialPage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
+      case 3:
+        return ProfilePage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
       case 4:
         return SettingsPage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
       default:
         return Container();
     }
+  }
+}
+
+class ExploreHubPage extends StatefulWidget {
+  final RVLocationManager locationManager;
+  final String username;
+  final VoidCallback onUpdate;
+
+  const ExploreHubPage({
+    required this.locationManager,
+    required this.username,
+    required this.onUpdate,
+    super.key,
+  });
+
+  @override
+  State<ExploreHubPage> createState() => _ExploreHubPageState();
+}
+
+class _ExploreHubPageState extends State<ExploreHubPage> {
+  int _modeIndex = 0; // 0 = Locations, 1 = Map
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: SegmentedButton<int>(
+            selected: {_modeIndex},
+            onSelectionChanged: (selection) {
+              setState(() {
+                _modeIndex = selection.first;
+              });
+            },
+            segments: const [
+              ButtonSegment<int>(
+                value: 0,
+                label: Text('Locations'),
+                icon: Icon(Icons.list_alt),
+              ),
+              ButtonSegment<int>(
+                value: 1,
+                label: Text('Map'),
+                icon: Icon(Icons.map),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _modeIndex == 0
+              ? LocationsExplorePage(
+                  locationManager: widget.locationManager,
+                  username: widget.username,
+                  onUpdate: widget.onUpdate,
+                )
+              : MapWeatherPage(
+                  locationManager: widget.locationManager,
+                  username: widget.username,
+                ),
+        ),
+      ],
+    );
   }
 }
 
@@ -1284,7 +1758,9 @@ class LocationsListPage extends StatefulWidget {
 }
 
 class _LocationsListPageState extends State<LocationsListPage> {
-  static const double _nearbyRadiusMeters = 30000;
+  static const double _defaultNearbyRadiusMiles = 20;
+  static const double _minNearbyRadiusMiles = 3;
+  static const double _maxNearbyRadiusMiles = 60;
   static const double _nearbyRefreshDistanceKm = 0.5;
   String? _filterType;
   Position? _userLocation;
@@ -1296,6 +1772,9 @@ class _LocationsListPageState extends State<LocationsListPage> {
   String? _nearbyError;
   bool _useMockLocation = false;
   Timer? _nearbyRefreshTimer;
+  double _nearbyRadiusMiles = _defaultNearbyRadiusMiles;
+
+  int get _nearbyRadiusMeters => (_nearbyRadiusMiles * 1609.344).round();
 
   // Mock location: San Francisco area
   static const double mockLatitude = 37.7749;
@@ -1452,47 +1931,99 @@ class _LocationsListPageState extends State<LocationsListPage> {
     String locationName = 'My Current Location';
     String? address = 'Detected from your device GPS';
 
-    try {
-      final placemarks = await placemarkFromCoordinates(
-        position.latitude,
-        position.longitude,
-      );
+    if (hasGoogleMapsApiKey) {
+      try {
+        final uri = Uri.parse(
+          'https://maps.googleapis.com/maps/api/geocode/json'
+          '?latlng=${position.latitude},${position.longitude}'
+          '&key=$kGoogleMapsApiKey',
+        );
+        final response = await http.get(uri).timeout(const Duration(seconds: 8));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          if (data['status'] == 'OK') {
+            final results = (data['results'] as List<dynamic>? ?? const []);
+            if (results.isNotEmpty) {
+              final first = results.first as Map<String, dynamic>;
+              final formatted = first['formatted_address']?.toString().trim();
+              if (formatted != null && formatted.isNotEmpty) {
+                address = formatted;
+              }
 
-      if (placemarks.isNotEmpty) {
-        final place = placemarks.first;
-        final titleParts = [
-          place.locality,
-          place.administrativeArea,
-          place.country,
-        ]
-            .whereType<String>()
-            .map((part) => part.trim())
-            .where((part) => part.isNotEmpty)
-            .toList();
+              final components = (first['address_components'] as List<dynamic>? ?? const []);
+              String? locality;
+              String? adminArea;
+              for (final component in components) {
+                final comp = component as Map<String, dynamic>;
+                final types = (comp['types'] as List<dynamic>? ?? const []).cast<String>();
+                if (locality == null && types.contains('locality')) {
+                  locality = comp['long_name']?.toString();
+                }
+                if (adminArea == null && types.contains('administrative_area_level_1')) {
+                  adminArea = comp['short_name']?.toString() ?? comp['long_name']?.toString();
+                }
+              }
 
-        if (titleParts.isNotEmpty) {
-          locationName = titleParts.take(2).join(', ');
+              final titleParts = [locality, adminArea]
+                  .whereType<String>()
+                  .map((part) => part.trim())
+                  .where((part) => part.isNotEmpty)
+                  .toList();
+
+              if (titleParts.isNotEmpty) {
+                locationName = titleParts.join(', ');
+              }
+            }
+          }
         }
-
-        final addressParts = [
-          place.name,
-          place.subLocality,
-          place.locality,
-          place.administrativeArea,
-          place.postalCode,
-          place.country,
-        ]
-            .whereType<String>()
-            .map((part) => part.trim())
-            .where((part) => part.isNotEmpty)
-            .toList();
-
-        if (addressParts.isNotEmpty) {
-          address = addressParts.join(', ');
-        }
+      } catch (_) {
+        // Fall back to local geocoding below.
       }
-    } catch (_) {
-      // Keep GPS fallback text if reverse geocoding is unavailable.
+    }
+
+    if (locationName == 'My Current Location') {
+      try {
+        final placemarks = await placemarkFromCoordinates(
+          position.latitude,
+          position.longitude,
+        );
+
+        if (placemarks.isNotEmpty) {
+          final place = placemarks.first;
+          final titleParts = [
+            place.locality,
+            place.administrativeArea,
+            place.country,
+          ]
+              .whereType<String>()
+              .map((part) => part.trim())
+              .where((part) => part.isNotEmpty)
+              .toList();
+
+          if (titleParts.isNotEmpty) {
+            locationName = titleParts.take(2).join(', ');
+          }
+
+          final addressParts = [
+            place.name,
+            place.subLocality,
+            place.locality,
+            place.administrativeArea,
+            place.postalCode,
+            place.country,
+          ]
+              .whereType<String>()
+              .map((part) => part.trim())
+              .where((part) => part.isNotEmpty)
+              .toList();
+
+          if (addressParts.isNotEmpty) {
+            address = addressParts.join(', ');
+          }
+        }
+      } catch (_) {
+        // Keep GPS fallback text if reverse geocoding is unavailable.
+      }
     }
 
     if (widget.username.toLowerCase() == 'admin') {
@@ -1528,30 +2059,225 @@ class _LocationsListPageState extends State<LocationsListPage> {
     });
 
     try {
-      final query = '''
+      List<Map<String, dynamic>> parsed = [];
+      Object? googleError;
+
+      if (hasGoogleMapsApiKey) {
+        try {
+          parsed = await _loadNearbyPlacesFromGoogle(position);
+        } catch (e) {
+          googleError = e;
+        }
+      }
+
+      if (parsed.isEmpty) {
+        final fallbackParsed = await _loadNearbyPlacesFromOpenData(position);
+        parsed = fallbackParsed;
+        if (googleError != null && parsed.isEmpty) {
+          throw Exception('Google Places failed: $googleError');
+        }
+      }
+
+      parsed.sort((a, b) =>
+          (a['distance'] as double).compareTo(b['distance'] as double));
+
+      var addedCount = 0;
+      for (final place in parsed.take(30)) {
+        final lat = place['lat'] as double;
+        final lon = place['lon'] as double;
+        final name = place['name'] as String;
+        final type = place['type'] as String;
+
+        final existsNearby = widget.locationManager.locations.any((location) {
+          final distanceKm = calculateDistance(
+            location.latitude,
+            location.longitude,
+            lat,
+            lon,
+          );
+          return distanceKm < 0.15 && location.type == type;
+        });
+
+        if (existsNearby) {
+          continue;
+        }
+
+        widget.locationManager.addRVLocation(
+          name,
+          type,
+          lat,
+          lon,
+          hasGoogleMapsApiKey ? 'Google Places' : 'OpenStreetMap',
+          address: place['address'] as String?,
+        );
+        addedCount++;
+      }
+
+      if (addedCount > 0) {
+        widget.onUpdate();
+      }
+
+      if (mounted) {
+        setState(() {
+          _nearbyLoaded = true;
+          _loadingNearby = false;
+          _lastNearbyFetchPosition = position;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loadingNearby = false;
+          _nearbyError = 'Could not load nearby travel locations: $e';
+        });
+      }
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadNearbyPlacesFromGoogle(Position position) async {
+    if (!hasGoogleMapsApiKey) {
+      return const [];
+    }
+
+    final keywords = <String>[
+      'campground',
+      'rv park',
+      'travel center',
+      'rest stop',
+      'visitor center',
+      'truck stop',
+      'sanitary dump station',
+    ];
+
+    final deduped = <String, Map<String, dynamic>>{};
+
+    for (final keyword in keywords) {
+      final uri = Uri.parse(
+        'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
+        '?location=${position.latitude},${position.longitude}'
+        '&radius=$_nearbyRadiusMeters'
+        '&keyword=${Uri.encodeQueryComponent(keyword)}'
+        '&key=$kGoogleMapsApiKey',
+      );
+
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) {
+        continue;
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final status = data['status']?.toString();
+      if (status != 'OK' && status != 'ZERO_RESULTS') {
+        continue;
+      }
+
+      final results = (data['results'] as List<dynamic>? ?? const []);
+      for (final raw in results) {
+        final place = raw as Map<String, dynamic>;
+        final geometry = (place['geometry'] as Map<String, dynamic>? ?? const {});
+        final location = (geometry['location'] as Map<String, dynamic>? ?? const {});
+        final lat = (location['lat'] as num?)?.toDouble();
+        final lon = (location['lng'] as num?)?.toDouble();
+        if (lat == null || lon == null) {
+          continue;
+        }
+
+        final name = place['name']?.toString().trim();
+        if (name == null || name.isEmpty) {
+          continue;
+        }
+
+        final placeId = place['place_id']?.toString() ?? '$name:$lat:$lon';
+        final types = (place['types'] as List<dynamic>? ?? const [])
+            .map((e) => e.toString())
+            .toList();
+        final mappedType = _mapGooglePlaceToDirectoryType(name, types);
+
+        deduped[placeId] = {
+          'name': name,
+          'type': mappedType,
+          'lat': lat,
+          'lon': lon,
+          'address': place['vicinity']?.toString(),
+          'distance': calculateDistance(position.latitude, position.longitude, lat, lon),
+        };
+      }
+    }
+
+    return deduped.values.toList();
+  }
+
+  String _mapGooglePlaceToDirectoryType(String name, List<String> types) {
+    final lowerName = name.toLowerCase();
+    final normalizedTypes = types.map((e) => e.toLowerCase()).toList();
+
+    final isGuestCenter = normalizedTypes.contains('tourist_attraction') &&
+            (lowerName.contains('visitor center') || lowerName.contains('guest center')) ||
+        lowerName.contains('visitor centre') ||
+        lowerName.contains('guest centre');
+    if (isGuestCenter) {
+      return 'Guest Center';
+    }
+
+    final isCamping = normalizedTypes.contains('campground') ||
+        lowerName.contains('campground') ||
+        lowerName.contains('rv park');
+    if (isCamping) {
+      return 'Camping';
+    }
+
+    final isRvService = lowerName.contains('rv') ||
+        lowerName.contains('motorhome') ||
+        lowerName.contains('camper') ||
+        lowerName.contains('dump station');
+    if (isRvService) {
+      return 'RV Service';
+    }
+
+    final isTravelCenter = lowerName.contains('travel center') ||
+        lowerName.contains('truck stop') ||
+        normalizedTypes.contains('gas_station');
+    if (isTravelCenter) {
+      return 'Travel Center';
+    }
+
+    final isRestStop = lowerName.contains('rest stop') ||
+        lowerName.contains('rest area') ||
+        lowerName.contains('service area');
+    if (isRestStop) {
+      return 'Rest Stop';
+    }
+
+    return 'Travel Center';
+  }
+
+  Future<List<Map<String, dynamic>>> _loadNearbyPlacesFromOpenData(Position position) async {
+    final query = '''
 [out:json][timeout:25];
 (
-  node["tourism"="camp_site"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  way["tourism"="camp_site"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  node["tourism"="caravan_site"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  way["tourism"="caravan_site"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  node["highway"="rest_area"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  way["highway"="rest_area"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  node["highway"="services"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  way["highway"="services"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  node["amenity"="fuel"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  way["amenity"="fuel"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  node["amenity"="truck_stop"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  way["amenity"="truck_stop"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  node["amenity"="sanitary_dump_station"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  way["amenity"="sanitary_dump_station"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  node["tourism"="information"]["information"="visitor_centre"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  way["tourism"="information"]["information"="visitor_centre"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  node["tourism"="information"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
-  way["tourism"="information"](around:${_nearbyRadiusMeters.toInt()},${position.latitude},${position.longitude});
+  node["tourism"="camp_site"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  way["tourism"="camp_site"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  node["tourism"="caravan_site"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  way["tourism"="caravan_site"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  node["highway"="rest_area"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  way["highway"="rest_area"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  node["highway"="services"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  way["highway"="services"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  node["amenity"="fuel"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  way["amenity"="fuel"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  node["amenity"="truck_stop"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  way["amenity"="truck_stop"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  node["amenity"="sanitary_dump_station"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  way["amenity"="sanitary_dump_station"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  node["tourism"="information"]["information"="visitor_centre"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  way["tourism"="information"]["information"="visitor_centre"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  node["tourism"="information"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
+  way["tourism"="information"](around:$_nearbyRadiusMeters,${position.latitude},${position.longitude});
 );
 out center 80;
 ''';
+
+    try {
 
       const endpoints = [
         'https://overpass-api.de/api/interpreter',
@@ -1688,59 +2414,9 @@ out center 80;
         });
       }
 
-      parsed.sort((a, b) =>
-          (a['distance'] as double).compareTo(b['distance'] as double));
-
-      var addedCount = 0;
-      for (final place in parsed.take(30)) {
-        final lat = place['lat'] as double;
-        final lon = place['lon'] as double;
-        final name = place['name'] as String;
-        final type = place['type'] as String;
-
-        final existsNearby = widget.locationManager.locations.any((location) {
-          final distanceKm = calculateDistance(
-            location.latitude,
-            location.longitude,
-            lat,
-            lon,
-          );
-          return distanceKm < 0.15 && location.type == type;
-        });
-
-        if (existsNearby) {
-          continue;
-        }
-
-        widget.locationManager.addRVLocation(
-          name,
-          type,
-          lat,
-          lon,
-          'OpenStreetMap',
-          address: place['address'] as String?,
-        );
-        addedCount++;
-      }
-
-      if (addedCount > 0) {
-        widget.onUpdate();
-      }
-
-      if (mounted) {
-        setState(() {
-          _nearbyLoaded = true;
-          _loadingNearby = false;
-          _lastNearbyFetchPosition = position;
-        });
-      }
+      return parsed;
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loadingNearby = false;
-          _nearbyError = 'Could not load nearby travel locations: $e';
-        });
-      }
+      throw Exception('Open data nearby search failed: $e');
     }
   }
 
@@ -1872,8 +2548,49 @@ out center 80;
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Text(
-                    'Loading nearby camping, RV services, travel centers, rest stops, and guest centers...',
+                    'Loading nearby places within ${_nearbyRadiusMiles.toStringAsFixed(0)} mi...',
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ),
+              if (_userLocation != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.radar, size: 16, color: Color(0xFF0F4C81)),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Nearby search radius: ${_nearbyRadiusMiles.toStringAsFixed(0)} mi',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[700], fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        value: _nearbyRadiusMiles,
+                        min: _minNearbyRadiusMiles,
+                        max: _maxNearbyRadiusMiles,
+                        divisions: ((_maxNearbyRadiusMiles - _minNearbyRadiusMiles) / 3).round(),
+                        label: '${_nearbyRadiusMiles.toStringAsFixed(0)} mi',
+                        onChanged: (value) {
+                          setState(() {
+                            _nearbyRadiusMiles = value;
+                          });
+                        },
+                        onChangeEnd: (_) {
+                          if (_userLocation == null || _loadingNearby) {
+                            return;
+                          }
+                          setState(() {
+                            _nearbyLoaded = false;
+                            _nearbyError = null;
+                          });
+                          unawaited(_loadNearbyPlaces(_userLocation!, forceRefresh: true));
+                        },
+                      ),
+                    ],
                   ),
                 ),
               if (_nearbyError != null)
@@ -1925,7 +2642,7 @@ out center 80;
                       locationManager: widget.locationManager,
                       onUpdate: widget.onUpdate,
                       coordinateFormat: coordinateFormat,
-                      distanceUnit: widget.locationManager.users[widget.username]?.preferences.distanceUnit ?? 'km',
+                      distanceUnit: widget.locationManager.users[widget.username]?.preferences.distanceUnit ?? 'miles',
                       distance: distance,
                     );
                   },
@@ -1951,7 +2668,7 @@ class LocationCard extends StatelessWidget {
     required this.onUpdate,
     this.coordinateFormat = 'decimal',
     this.distance,
-    this.distanceUnit = 'km',
+    this.distanceUnit = 'miles',
     super.key,
   });
 
@@ -2346,6 +3063,7 @@ class _AddLocationPageState extends State<AddLocationPage> {
   final _photoUrlsController = TextEditingController();
   final _videoUrlsController = TextEditingController();
   String _selectedType = 'Parking';
+  bool _loadingCurrentLocation = false;
 
   @override
   Widget build(BuildContext context) {
@@ -2391,6 +3109,21 @@ class _AddLocationPageState extends State<AddLocationPage> {
                   label: 'Address',
                   icon: Icons.home,
                   hint: 'e.g., 1500 Broadway, New York, NY 10036',
+                ),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: _loadingCurrentLocation ? null : _useCurrentLocation,
+                    icon: _loadingCurrentLocation
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.my_location),
+                    label: Text(_loadingCurrentLocation ? 'Getting location...' : 'Use Current Location'),
+                  ),
                 ),
                 const SizedBox(height: 20),
                 _buildFormField(
@@ -2520,6 +3253,111 @@ class _AddLocationPageState extends State<AddLocationPage> {
         ],
       ),
     );
+  }
+
+  Future<void> _useCurrentLocation() async {
+    setState(() {
+      _loadingCurrentLocation = true;
+    });
+
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        throw Exception('Location services are disabled on this device.');
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+        throw Exception('Location permission denied. Please enable it in Settings.');
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      ).timeout(const Duration(seconds: 10));
+
+      _latitudeController.text = position.latitude.toStringAsFixed(6);
+      _longitudeController.text = position.longitude.toStringAsFixed(6);
+
+      String? resolvedAddress;
+
+      if (hasGoogleMapsApiKey) {
+        try {
+          final uri = Uri.parse(
+            'https://maps.googleapis.com/maps/api/geocode/json'
+            '?latlng=${position.latitude},${position.longitude}'
+            '&key=$kGoogleMapsApiKey',
+          );
+          final response = await http.get(uri).timeout(const Duration(seconds: 8));
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body) as Map<String, dynamic>;
+            if (data['status'] == 'OK') {
+              final results = (data['results'] as List<dynamic>? ?? const []);
+              if (results.isNotEmpty) {
+                final first = results.first as Map<String, dynamic>;
+                final formatted = first['formatted_address']?.toString().trim();
+                if (formatted != null && formatted.isNotEmpty) {
+                  resolvedAddress = formatted;
+                }
+              }
+            }
+          }
+        } catch (_) {
+          // Fallback below.
+        }
+      }
+
+      if ((resolvedAddress ?? '').isEmpty) {
+        try {
+          final placemarks = await placemarkFromCoordinates(position.latitude, position.longitude);
+          if (placemarks.isNotEmpty) {
+            final place = placemarks.first;
+            final parts = [
+              place.name,
+              place.subLocality,
+              place.locality,
+              place.administrativeArea,
+              place.postalCode,
+              place.country,
+            ]
+                .whereType<String>()
+                .map((e) => e.trim())
+                .where((e) => e.isNotEmpty)
+                .toList();
+            if (parts.isNotEmpty) {
+              resolvedAddress = parts.join(', ');
+            }
+          }
+        } catch (_) {
+          // Keep coordinates only if reverse geocoding is unavailable.
+        }
+      }
+
+      if ((resolvedAddress ?? '').isNotEmpty) {
+        _addressController.text = resolvedAddress!;
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Current location added to form.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingCurrentLocation = false;
+        });
+      }
+    }
   }
 
   Widget _buildFormField({
@@ -3149,11 +3987,24 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
   double? _windMph;
   int? _humidityPercent;
   int? _rainChancePercent;
+  final TextEditingController _destinationController = TextEditingController();
+  bool _avoidPropaneRestrictedTunnels = true;
+  bool _runningRouteCheck = false;
+  String? _routeCheckSummary;
+  final Set<String> _cachedMapRegions = {};
+  final Map<String, double> _cacheProgressByRegion = {};
+  final Set<String> _regionsDownloading = {};
 
   @override
   void initState() {
     super.initState();
     _loadCurrentPosition();
+  }
+
+  @override
+  void dispose() {
+    _destinationController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadCurrentPosition() async {
@@ -3199,20 +4050,65 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
       ).timeout(const Duration(seconds: 8));
 
       String resolvedLabel = 'Current area';
-      try {
-        final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
-        if (placemarks.isNotEmpty) {
-          final place = placemarks.first;
-          final parts = <String>[
-            if ((place.locality ?? '').trim().isNotEmpty) place.locality!.trim(),
-            if ((place.administrativeArea ?? '').trim().isNotEmpty) place.administrativeArea!.trim(),
-          ];
-          if (parts.isNotEmpty) {
-            resolvedLabel = parts.join(', ');
+      if (hasGoogleMapsApiKey) {
+        try {
+          final uri = Uri.parse(
+            'https://maps.googleapis.com/maps/api/geocode/json'
+            '?latlng=${pos.latitude},${pos.longitude}'
+            '&key=$kGoogleMapsApiKey',
+          );
+          final response = await http.get(uri).timeout(const Duration(seconds: 8));
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body) as Map<String, dynamic>;
+            if (data['status'] == 'OK') {
+              final results = (data['results'] as List<dynamic>? ?? const []);
+              if (results.isNotEmpty) {
+                final first = results.first as Map<String, dynamic>;
+                final components = (first['address_components'] as List<dynamic>? ?? const []);
+                String? locality;
+                String? adminArea;
+                for (final component in components) {
+                  final comp = component as Map<String, dynamic>;
+                  final types = (comp['types'] as List<dynamic>? ?? const []).cast<String>();
+                  if (locality == null && types.contains('locality')) {
+                    locality = comp['long_name']?.toString();
+                  }
+                  if (adminArea == null && types.contains('administrative_area_level_1')) {
+                    adminArea = comp['short_name']?.toString() ?? comp['long_name']?.toString();
+                  }
+                }
+
+                final parts = <String>[
+                  if ((locality ?? '').trim().isNotEmpty) locality!.trim(),
+                  if ((adminArea ?? '').trim().isNotEmpty) adminArea!.trim(),
+                ];
+                if (parts.isNotEmpty) {
+                  resolvedLabel = parts.join(', ');
+                }
+              }
+            }
           }
+        } catch (_) {
+          // Fallback to local geocoder below.
         }
-      } catch (_) {
-        // Keep fallback label if reverse geocoding fails.
+      }
+
+      if (resolvedLabel == 'Current area') {
+        try {
+          final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
+          if (placemarks.isNotEmpty) {
+            final place = placemarks.first;
+            final parts = <String>[
+              if ((place.locality ?? '').trim().isNotEmpty) place.locality!.trim(),
+              if ((place.administrativeArea ?? '').trim().isNotEmpty) place.administrativeArea!.trim(),
+            ];
+            if (parts.isNotEmpty) {
+              resolvedLabel = parts.join(', ');
+            }
+          }
+        } catch (_) {
+          // Keep fallback label if reverse geocoding fails.
+        }
       }
 
       if (mounted) {
@@ -3347,15 +4243,182 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
     return 'No severe wind alerts near $_resolvedLocationLabel right now.';
   }
 
-  LatLng _initialCenter() {
+  gmaps.LatLng _initialCenter() {
     if (_currentPosition != null) {
-      return LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
+      return gmaps.LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
     }
     if (widget.locationManager.locations.isNotEmpty) {
       final first = widget.locationManager.locations.first;
-      return LatLng(first.latitude, first.longitude);
+      return gmaps.LatLng(first.latitude, first.longitude);
     }
-    return const LatLng(39.8283, -98.5795);
+    return const gmaps.LatLng(39.8283, -98.5795);
+  }
+
+  bool _canUseNativeGoogleMap() {
+    final platform = defaultTargetPlatform;
+    return hasGoogleMapsApiKey && (platform == TargetPlatform.iOS || platform == TargetPlatform.android);
+  }
+
+  double _markerHueForType(String type) {
+    if (type == 'Propane Refill') {
+      return gmaps.BitmapDescriptor.hueViolet;
+    }
+    if (type == 'Dump Station') {
+      return gmaps.BitmapDescriptor.hueCyan;
+    }
+    if (type == 'BLM Boondocking') {
+      return gmaps.BitmapDescriptor.hueYellow;
+    }
+    if (type == 'RV Park') {
+      return gmaps.BitmapDescriptor.hueGreen;
+    }
+    if (type == 'Rest Area' || type == 'Rest Stop' || type == 'Travel Center') {
+      return gmaps.BitmapDescriptor.hueOrange;
+    }
+    if (type == 'Guest Center') {
+      return gmaps.BitmapDescriptor.hueBlue;
+    }
+    return gmaps.BitmapDescriptor.hueGreen;
+  }
+
+  IconData _markerIconForType(String type) {
+    if (type == 'Propane Refill') {
+      return Icons.propane_tank;
+    }
+    if (type == 'Dump Station') {
+      return Icons.water_drop;
+    }
+    if (type == 'BLM Boondocking') {
+      return Icons.forest;
+    }
+    if (type == 'RV Park') {
+      return Icons.rv_hookup;
+    }
+    if (type == 'Rest Area' || type == 'Rest Stop' || type == 'Travel Center') {
+      return Icons.local_gas_station;
+    }
+    if (type == 'Guest Center') {
+      return Icons.info;
+    }
+    return Icons.terrain;
+  }
+
+  Color _markerColorForType(String type) {
+    if (type == 'Propane Refill') {
+      return const Color(0xFF6A1B9A);
+    }
+    if (type == 'Dump Station') {
+      return const Color(0xFF00838F);
+    }
+    if (type == 'BLM Boondocking') {
+      return const Color(0xFFF9A825);
+    }
+    if (type == 'RV Park') {
+      return const Color(0xFF2E7D32);
+    }
+    if (type == 'Rest Area' || type == 'Rest Stop' || type == 'Travel Center') {
+      return const Color(0xFFEF6C00);
+    }
+    if (type == 'Guest Center') {
+      return const Color(0xFF1565C0);
+    }
+    return const Color(0xFF2E7D32);
+  }
+
+  Set<gmaps.Marker> _buildGoogleMapMarkers() {
+    final markers = <gmaps.Marker>{};
+
+    if (_currentPosition != null) {
+      markers.add(
+        gmaps.Marker(
+          markerId: const gmaps.MarkerId('current_location'),
+          position: gmaps.LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(gmaps.BitmapDescriptor.hueAzure),
+          infoWindow: const gmaps.InfoWindow(title: 'Your current location'),
+        ),
+      );
+    }
+
+    for (final location in widget.locationManager.locations.take(120)) {
+      markers.add(
+        gmaps.Marker(
+          markerId: gmaps.MarkerId(location.id),
+          position: gmaps.LatLng(location.latitude, location.longitude),
+          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(_markerHueForType(location.type)),
+          infoWindow: gmaps.InfoWindow(
+            title: location.name,
+            snippet: location.type,
+          ),
+        ),
+      );
+    }
+
+    return markers;
+  }
+
+  Widget _buildMapWidget(gmaps.LatLng center) {
+    if (_canUseNativeGoogleMap()) {
+      return gmaps.GoogleMap(
+        initialCameraPosition: gmaps.CameraPosition(
+          target: center,
+          zoom: _currentPosition != null ? 11.5 : 4.2,
+        ),
+        mapType: gmaps.MapType.terrain,
+        markers: _buildGoogleMapMarkers(),
+        myLocationEnabled: _currentPosition != null,
+        myLocationButtonEnabled: true,
+        compassEnabled: true,
+        zoomControlsEnabled: true,
+      );
+    }
+
+    final fallbackMarkers = <osm.Marker>[
+      if (_currentPosition != null)
+        osm.Marker(
+          point: latlng.LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+          width: 32,
+          height: 32,
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F4C81),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+            ),
+            child: const Icon(Icons.my_location, color: Colors.white, size: 16),
+          ),
+        ),
+      ...widget.locationManager.locations.take(80).map(
+            (location) => osm.Marker(
+              point: latlng.LatLng(location.latitude, location.longitude),
+              width: 30,
+              height: 30,
+              child: Tooltip(
+                message: '${location.name}\n${location.type}',
+                child: Icon(
+                  _markerIconForType(location.type),
+                  color: _markerColorForType(location.type),
+                  size: 24,
+                ),
+              ),
+            ),
+          ),
+    ];
+
+    return osm.FlutterMap(
+      options: osm.MapOptions(
+        initialCenter: latlng.LatLng(center.latitude, center.longitude),
+        initialZoom: _currentPosition != null ? 11.5 : 4.2,
+        minZoom: 3,
+        maxZoom: 18,
+      ),
+      children: [
+        osm.TileLayer(
+          urlTemplate: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.example.rvapp1',
+        ),
+        osm.MarkerLayer(markers: fallbackMarkers),
+      ],
+    );
   }
 
   String _currentCoordinatesLabel() {
@@ -3396,10 +4459,252 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
   }
 
   String _formatDistance(double km) {
-    if (km < 1) {
-      return '${(km * 1000).round()} m away';
+    final miles = km * 0.621371;
+    if (miles < 0.1) {
+      return '${(miles * 5280).round()} ft away';
     }
-    return '${km.toStringAsFixed(1)} km away';
+    return '${miles.toStringAsFixed(1)} mi away';
+  }
+
+  bool _containsAnyKeyword(String source, List<String> keywords) {
+    final normalized = source.toLowerCase();
+    return keywords.any((keyword) => normalized.contains(keyword));
+  }
+
+  bool _isFuelStopType(String type) {
+    return type == 'Travel Center' ||
+        type == 'Rest Stop' ||
+        type == 'Rest Area' ||
+        type == 'Propane Refill';
+  }
+
+  RVLocation? _bestCorridorStop({
+    required double startLat,
+    required double startLon,
+    required double destLat,
+    required double destLon,
+    required bool Function(RVLocation location) match,
+    RVLocation? exclude,
+  }) {
+    final directKm = calculateDistance(startLat, startLon, destLat, destLon);
+    RVLocation? best;
+    double bestScore = double.infinity;
+
+    for (final location in widget.locationManager.locations) {
+      if (exclude != null && exclude.id == location.id) {
+        continue;
+      }
+      if (!match(location)) {
+        continue;
+      }
+
+      final startToStop = calculateDistance(startLat, startLon, location.latitude, location.longitude);
+      final stopToEnd = calculateDistance(location.latitude, location.longitude, destLat, destLon);
+      final detour = (startToStop + stopToEnd) - directKm;
+
+      if (detour > max(45, directKm * 0.35)) {
+        continue;
+      }
+
+      final score = detour + (startToStop * 0.08);
+      if (score < bestScore) {
+        bestScore = score;
+        best = location;
+      }
+    }
+
+    return best;
+  }
+
+  Future<void> _runRvSafeRouteCheck() async {
+    final user = widget.locationManager.users[widget.username];
+    final destinationRaw = _destinationController.text.trim();
+    final isPro = user?.hasProAccess ?? false;
+
+    if (_currentPosition == null) {
+      setState(() {
+        _routeCheckSummary = 'Current location is required before running a route check.';
+      });
+      return;
+    }
+
+    if (user == null || user.rigHeightFt == null || user.rigWeightLbs == null || user.rigLengthFt == null) {
+      setState(() {
+        _routeCheckSummary = 'Complete your vehicle profile first (height, weight, length) to run RV-safe navigation.';
+      });
+      return;
+    }
+
+    if (destinationRaw.isEmpty) {
+      setState(() {
+        _routeCheckSummary = 'Enter a destination to run RV-safe routing checks.';
+      });
+      return;
+    }
+
+    setState(() {
+      _runningRouteCheck = true;
+      _routeCheckSummary = null;
+    });
+
+    try {
+      final destinations = await locationFromAddress(destinationRaw).timeout(const Duration(seconds: 10));
+      if (destinations.isEmpty) {
+        throw Exception('Destination was not found');
+      }
+
+      final destination = destinations.first;
+      final routeDistanceKm = calculateDistance(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        destination.latitude,
+        destination.longitude,
+      );
+
+      final lowClearanceKeywords = ['low clearance', 'clearance', 'bridge 12', 'bridge 11', 'bridge 10'];
+      final propaneKeywords = ['propane', 'restricted tunnel', 'tunnel restriction', 'hazmat tunnel'];
+
+      final hazards = widget.locationManager.locations.where((location) {
+        final source = '${location.name} ${location.type} ${location.details ?? ''}'.toLowerCase();
+        final nearStart = calculateDistance(
+              _currentPosition!.latitude,
+              _currentPosition!.longitude,
+              location.latitude,
+              location.longitude,
+            ) <=
+            80;
+        final nearEnd = calculateDistance(
+              destination.latitude,
+              destination.longitude,
+              location.latitude,
+              location.longitude,
+            ) <=
+            80;
+
+        if (!(nearStart || nearEnd)) {
+          return false;
+        }
+
+        final lowClearanceRisk = user.rigHeightFt! >= 12.5 && _containsAnyKeyword(source, lowClearanceKeywords);
+        final propaneRisk = _avoidPropaneRestrictedTunnels && _containsAnyKeyword(source, propaneKeywords);
+        return lowClearanceRisk || propaneRisk;
+      }).toList();
+
+      final miles = routeDistanceKm * 0.621371;
+      final safetyLine = hazards.isEmpty
+          ? 'No high-risk clearance or propane restrictions detected near this route.'
+          : '${hazards.length} potential restriction point${hazards.length == 1 ? '' : 's'} detected. RV-safe reroute advised.';
+
+      String stopPlan = 'Upgrade to Pro to unlock ordered fuel, propane, and dump stop sequencing.';
+      if (isPro) {
+        final bestFuelStop = _bestCorridorStop(
+          startLat: _currentPosition!.latitude,
+          startLon: _currentPosition!.longitude,
+          destLat: destination.latitude,
+          destLon: destination.longitude,
+          match: (location) {
+            if (user.isTowing) {
+              return location.type == 'Travel Center' || location.type == 'Propane Refill';
+            }
+            return _isFuelStopType(location.type);
+          },
+        );
+
+        final bestPropaneStop = _bestCorridorStop(
+          startLat: _currentPosition!.latitude,
+          startLon: _currentPosition!.longitude,
+          destLat: destination.latitude,
+          destLon: destination.longitude,
+          match: (location) => location.type == 'Propane Refill',
+          exclude: bestFuelStop,
+        );
+
+        final bestDumpStop = _bestCorridorStop(
+          startLat: _currentPosition!.latitude,
+          startLon: _currentPosition!.longitude,
+          destLat: destination.latitude,
+          destLon: destination.longitude,
+          match: (location) => location.type == 'Dump Station',
+        );
+
+        final plannedStops = <String>['Start'];
+        if (bestFuelStop != null) {
+          plannedStops.add('Fuel: ${bestFuelStop.name}');
+        }
+        if (bestPropaneStop != null) {
+          plannedStops.add('Propane: ${bestPropaneStop.name}');
+        }
+        if (bestDumpStop != null && routeDistanceKm >= 80) {
+          plannedStops.add('Dump: ${bestDumpStop.name}');
+        }
+        plannedStops.add('Destination');
+
+        stopPlan = plannedStops.length <= 2
+            ? 'No strong stop candidates found on this corridor yet.'
+            : plannedStops.join(' -> ');
+      }
+
+      setState(() {
+        _routeCheckSummary =
+            'Destination: $destinationRaw\n'
+            'Distance: ${miles.toStringAsFixed(1)} mi\n'
+            '$safetyLine\n'
+            'Safer stop sequence: $stopPlan';
+      });
+    } catch (error) {
+      setState(() {
+        _routeCheckSummary = 'Could not calculate route safety: ${error.toString().replaceFirst('Exception: ', '')}';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _runningRouteCheck = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _downloadRegionCache(String region) async {
+    final user = widget.locationManager.users[widget.username];
+    final isPro = user?.hasProAccess ?? false;
+
+    if (!isPro && region != 'Southwest') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Free plan includes one offline region. Upgrade to Pro for full regional caching.'),
+        ),
+      );
+      return;
+    }
+
+    if (_regionsDownloading.contains(region) || _cachedMapRegions.contains(region)) {
+      return;
+    }
+
+    setState(() {
+      _regionsDownloading.add(region);
+      _cacheProgressByRegion[region] = 0;
+    });
+
+    for (int i = 1; i <= 10; i++) {
+      await Future.delayed(const Duration(milliseconds: 180));
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _cacheProgressByRegion[region] = i / 10;
+      });
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _regionsDownloading.remove(region);
+      _cachedMapRegions.add(region);
+      _cacheProgressByRegion[region] = 1;
+    });
   }
 
   @override
@@ -3408,41 +4713,19 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
     final currentLocationLabel = _currentLocationLabel();
     final currentCoordinatesLabel = _currentCoordinatesLabel();
     final nearest = _nearestLocations();
-    final markers = <Marker>[
-      if (_currentPosition != null)
-        Marker(
-          point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-          width: 32,
-          height: 32,
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF0F4C81),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2),
-            ),
-            child: const Icon(Icons.my_location, color: Colors.white, size: 16),
-          ),
-        ),
-      ...widget.locationManager.locations.take(80).map(
-            (location) => Marker(
-              point: LatLng(location.latitude, location.longitude),
-              width: 30,
-              height: 30,
-              child: Tooltip(
-                message: '${location.name}\n${location.type}',
-                child: Icon(
-                  (location.type == 'Rest Area' || location.type == 'Rest Stop' || location.type == 'Travel Center')
-                      ? Icons.local_gas_station
-                      : (location.type == 'Guest Center' ? Icons.info : Icons.terrain),
-                  color: (location.type == 'Rest Area' || location.type == 'Rest Stop' || location.type == 'Travel Center')
-                      ? const Color(0xFFEF6C00)
-                      : (location.type == 'Guest Center' ? const Color(0xFF1565C0) : const Color(0xFF2E7D32)),
-                  size: 24,
-                ),
-              ),
-            ),
-          ),
-    ];
+    final currentUser = widget.locationManager.users[widget.username];
+    final isProUser = currentUser?.hasProAccess ?? false;
+    final curatedCounts = <String, int>{
+      'RV Park': 0,
+      'BLM Boondocking': 0,
+      'Dump Station': 0,
+      'Propane Refill': 0,
+    };
+    for (final location in widget.locationManager.locations) {
+      if (curatedCounts.containsKey(location.type)) {
+        curatedCounts[location.type] = (curatedCounts[location.type] ?? 0) + 1;
+      }
+    }
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -3462,22 +4745,7 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
               height: 320,
               child: Stack(
                 children: [
-                  FlutterMap(
-                    options: MapOptions(
-                      initialCenter: center,
-                      initialZoom: _currentPosition != null ? 11.5 : 4.2,
-                      minZoom: 3,
-                      maxZoom: 18,
-                    ),
-                    children: [
-                      TileLayer(
-                        // OpenTopoMap: terrain + roadways for travel view.
-                        urlTemplate: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.example.rvapp1',
-                      ),
-                      MarkerLayer(markers: markers),
-                    ],
-                  ),
+                  _buildMapWidget(center),
                   Positioned(
                     top: 12,
                     left: 12,
@@ -3488,11 +4756,27 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: const Text(
-                        'Terrain + Roads',
+                        'Terrain + Roads (Google on iOS/Android)',
                         style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
                       ),
                     ),
                   ),
+                  if (!hasGoogleMapsApiKey)
+                    Positioned(
+                      right: 12,
+                      bottom: 12,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xCC8A1C1C),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          'Google API key missing',
+                          style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
                   if (_loadingPosition)
                     const Positioned.fill(
                       child: ColoredBox(
@@ -3650,6 +4934,149 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
           ),
           const SizedBox(height: 16),
 
+          Text(
+            'RV-Safe Navigation Engine',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Route checks for low-clearance bridges and propane-restricted tunnels.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    currentUser == null ||
+                            currentUser.rigHeightFt == null ||
+                            currentUser.rigWeightLbs == null ||
+                            currentUser.rigLengthFt == null
+                        ? 'Vehicle profile missing'
+                        : 'Rig: ${currentUser.rigHeightFt!.toStringAsFixed(1)} ft high • ${currentUser.rigLengthFt!.toStringAsFixed(1)} ft long • ${currentUser.rigWeightLbs!.toStringAsFixed(0)} lbs • ${currentUser.isTowing ? 'Towing' : 'Not towing'}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _destinationController,
+                    decoration: const InputDecoration(
+                      labelText: 'Destination',
+                      hintText: 'City, state or full address',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _avoidPropaneRestrictedTunnels,
+                    onChanged: (value) => setState(() => _avoidPropaneRestrictedTunnels = value),
+                    title: const Text('Avoid propane-restricted tunnels'),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: _runningRouteCheck ? null : _runRvSafeRouteCheck,
+                    icon: const Icon(Icons.alt_route),
+                    label: Text(_runningRouteCheck ? 'Checking Route...' : (isProUser ? 'Build RV-Safe Route Plan' : 'Run Free Safety Check')),
+                  ),
+                  if (_routeCheckSummary != null) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5F9F7),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF1B5E4B).withValues(alpha: 0.2)),
+                      ),
+                      child: Text(_routeCheckSummary!),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          Text(
+            'Offline Map Caching',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Download regional map packs for offline searching and navigation.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (!isProUser)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Free plan: one region. Pro plan: all regions.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: const Color(0xFFB45309)),
+              ),
+            ),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  for (final region in const ['Southwest', 'Rocky Mountains', 'Pacific Northwest', 'Southeast'])
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(region),
+                          ),
+                          if (_regionsDownloading.contains(region))
+                            SizedBox(
+                              width: 120,
+                              child: LinearProgressIndicator(value: _cacheProgressByRegion[region] ?? 0),
+                            )
+                          else
+                            Text(
+                              _cachedMapRegions.contains(region) ? 'Cached' : 'Not cached',
+                              style: TextStyle(
+                                color: _cachedMapRegions.contains(region) ? Colors.green : Colors.orange,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          const SizedBox(width: 8),
+                          OutlinedButton(
+                            onPressed: _cachedMapRegions.contains(region) ? null : () => _downloadRegionCache(region),
+                            child: Text(_cachedMapRegions.contains(region) ? 'Ready' : 'Download'),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          Text(
+            'Curated RV POI Database',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: curatedCounts.entries
+                .map(
+                  (entry) => Chip(
+                    avatar: const Icon(Icons.place, size: 16),
+                    label: Text('${entry.key}: ${entry.value}'),
+                  ),
+                )
+                .toList(),
+          ),
+          const SizedBox(height: 16),
+
           // Road Conditions Section
           Text(
             'Road Conditions',
@@ -3773,6 +5200,475 @@ class _RoadConditionItem extends StatelessWidget {
   }
 }
 
+class ProfilePage extends StatefulWidget {
+  final RVLocationManager locationManager;
+  final String username;
+  final VoidCallback onUpdate;
+
+  const ProfilePage({
+    required this.locationManager,
+    required this.username,
+    required this.onUpdate,
+    super.key,
+  });
+
+  @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
+  @override
+  Widget build(BuildContext context) {
+    final user = widget.locationManager.users[widget.username];
+    if (user == null) {
+      return const Center(child: Text('Profile not found'));
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  CircleAvatar(
+                    radius: 42,
+                    backgroundColor: const Color(0xFF0F4C81),
+                    backgroundImage: (user.profilePicture ?? '').trim().isNotEmpty
+                        ? NetworkImage(user.profilePicture!.trim())
+                        : null,
+                    child: (user.profilePicture ?? '').trim().isNotEmpty
+                        ? null
+                        : Text(
+                            user.username.isEmpty ? '?' : user.username[0].toUpperCase(),
+                            style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.bold),
+                          ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    user.username,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(user.email ?? 'No email on file', style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(height: 4),
+                  Text(
+                    (user.hometown ?? '').trim().isEmpty ? 'No hometown added' : 'Hometown: ${user.hometown}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Profile Visible To Everyone'),
+                    subtitle: Text(
+                      user.preferences.showProfilePublicly
+                          ? 'Anyone can view your profile details.'
+                          : 'Your detailed profile info is hidden from other users.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    value: user.preferences.showProfilePublicly,
+                    onChanged: (value) {
+                      setState(() {
+                        user.preferences.showProfilePublicly = value;
+                      });
+                      widget.onUpdate();
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (!user.preferences.showProfilePublicly)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3E0),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFFFCC80)),
+                ),
+                child: const Text(
+                  'Profile privacy is ON. Other users will only see limited profile information.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF8A4B00), fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('About Me', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                      TextButton.icon(
+                        onPressed: () => _showEditAboutDialog(user),
+                        icon: const Icon(Icons.edit, size: 16),
+                        label: const Text('Edit'),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    (user.bio ?? '').trim().isEmpty ? 'No bio yet. Add your story!' : user.bio!,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('RV Details', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                      TextButton.icon(
+                        onPressed: () => _showEditRvDialog(user),
+                        icon: const Icon(Icons.edit, size: 16),
+                        label: const Text('Edit'),
+                      ),
+                    ],
+                  ),
+                  Text('${user.rvYear ?? 'Year'} ${user.rvMake ?? 'Make'} ${user.rvModel ?? 'Model'}'.trim()),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Photos', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                      TextButton.icon(
+                        onPressed: () => _showAddMediaDialog(user, mediaType: 'photo'),
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('Add'),
+                      ),
+                    ],
+                  ),
+                  if (user.photos.isEmpty)
+                    Text('No photos yet', style: Theme.of(context).textTheme.bodySmall)
+                  else
+                    SizedBox(
+                      height: 110,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: user.photos.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 10),
+                        itemBuilder: (context, index) {
+                          final url = user.photos[index];
+                          return Stack(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: Image.network(
+                                  url,
+                                  width: 140,
+                                  height: 110,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Container(
+                                    width: 140,
+                                    height: 110,
+                                    color: Colors.grey.shade200,
+                                    alignment: Alignment.center,
+                                    child: const Icon(Icons.broken_image),
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                right: 4,
+                                top: 4,
+                                child: InkWell(
+                                  onTap: () {
+                                    setState(() => user.photos.removeAt(index));
+                                    widget.onUpdate();
+                                  },
+                                  child: Container(
+                                    decoration: const BoxDecoration(color: Color(0xAA000000), shape: BoxShape.circle),
+                                    padding: const EdgeInsets.all(4),
+                                    child: const Icon(Icons.close, size: 14, color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Videos', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                      TextButton.icon(
+                        onPressed: () => _showAddMediaDialog(user, mediaType: 'video'),
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('Add'),
+                      ),
+                    ],
+                  ),
+                  if (user.videos.isEmpty)
+                    Text('No videos yet', style: Theme.of(context).textTheme.bodySmall)
+                  else
+                    Column(
+                      children: user.videos.asMap().entries.map((entry) {
+                        final index = entry.key;
+                        final videoUrl = entry.value;
+                        return ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.play_circle_outline),
+                          title: Text(
+                            videoUrl,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: IconButton(
+                            onPressed: () {
+                              setState(() => user.videos.removeAt(index));
+                              widget.onUpdate();
+                            },
+                            icon: const Icon(Icons.delete_outline),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Social Links', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                      TextButton.icon(
+                        onPressed: () => _showAddSocialDialog(user),
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('Add'),
+                      ),
+                    ],
+                  ),
+                  if (user.socials.isEmpty)
+                    Text('No social links yet', style: Theme.of(context).textTheme.bodySmall)
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: user.socials.entries.map((entry) {
+                        return InputChip(
+                          label: Text('${entry.key}: ${entry.value}'),
+                          onDeleted: () {
+                            setState(() => user.removeSocial(entry.key));
+                            widget.onUpdate();
+                          },
+                        );
+                      }).toList(),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditAboutDialog(RVUser user) {
+    final bioController = TextEditingController(text: user.bio ?? '');
+    final hometownController = TextEditingController(text: user.hometown ?? '');
+    final profilePicController = TextEditingController(text: user.profilePicture ?? '');
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Edit Profile Info'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: hometownController,
+                decoration: const InputDecoration(labelText: 'Hometown', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: profilePicController,
+                decoration: const InputDecoration(labelText: 'Profile Picture URL', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: bioController,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: 'Bio', border: OutlineInputBorder()),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              setState(() {
+                user.updateHometown(hometownController.text.trim());
+                user.updateBio(bioController.text.trim());
+                user.updateProfilePicture(profilePicController.text.trim());
+              });
+              widget.onUpdate();
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditRvDialog(RVUser user) {
+    final makeController = TextEditingController(text: user.rvMake ?? '');
+    final modelController = TextEditingController(text: user.rvModel ?? '');
+    final yearController = TextEditingController(text: user.rvYear ?? '');
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Edit RV Details'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: yearController, decoration: const InputDecoration(labelText: 'Year', border: OutlineInputBorder())),
+            const SizedBox(height: 10),
+            TextField(controller: makeController, decoration: const InputDecoration(labelText: 'Make', border: OutlineInputBorder())),
+            const SizedBox(height: 10),
+            TextField(controller: modelController, decoration: const InputDecoration(labelText: 'Model', border: OutlineInputBorder())),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              setState(() {
+                user.updateRVInfo(makeController.text.trim(), modelController.text.trim(), yearController.text.trim());
+              });
+              widget.onUpdate();
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddMediaDialog(RVUser user, {required String mediaType}) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Add ${mediaType == 'photo' ? 'Photo' : 'Video'} URL'),
+        content: TextField(
+          controller: controller,
+          decoration: InputDecoration(
+            hintText: mediaType == 'photo' ? 'https://example.com/photo.jpg' : 'https://youtube.com/watch?v=...',
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isEmpty) {
+                return;
+              }
+              setState(() {
+                if (mediaType == 'photo') {
+                  user.addPhoto(value);
+                } else {
+                  user.addVideo(value);
+                }
+              });
+              widget.onUpdate();
+              Navigator.pop(context);
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddSocialDialog(RVUser user) {
+    final platformController = TextEditingController();
+    final handleController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Add Social Link'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: platformController, decoration: const InputDecoration(labelText: 'Platform', border: OutlineInputBorder())),
+            const SizedBox(height: 10),
+            TextField(controller: handleController, decoration: const InputDecoration(labelText: 'Handle or URL', border: OutlineInputBorder())),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final platform = platformController.text.trim();
+              final handle = handleController.text.trim();
+              if (platform.isEmpty || handle.isEmpty) {
+                return;
+              }
+              setState(() => user.addSocial(platform, handle));
+              widget.onUpdate();
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // Dashboard Page - Dashboard with user stats and quick access
 class DashboardPage extends StatefulWidget {
   final RVLocationManager locationManager;
@@ -3791,6 +5687,148 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
+  Position? _currentPosition;
+  bool _loadingLocation = false;
+  String? _locationError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCurrentLocation();
+  }
+
+  Future<void> _loadCurrentLocation() async {
+    setState(() {
+      _loadingLocation = true;
+      _locationError = null;
+    });
+
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        throw Exception('Location services are disabled on this device.');
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+        throw Exception('Location permission denied. Enable it in Settings to see nearby gas prices.');
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      ).timeout(const Duration(seconds: 10));
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _currentPosition = position;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _locationError = error.toString().replaceFirst('Exception: ', '');
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingLocation = false;
+        });
+      }
+    }
+  }
+
+  bool _isGasLocation(RVLocation location) {
+    final type = location.type.toLowerCase();
+    return type.contains('gas') ||
+        type.contains('fuel') ||
+        type.contains('truck stop') ||
+        type.contains('travel center') ||
+        type.contains('service');
+  }
+
+  List<MapEntry<RVLocation, double>> _nearbyGasStations() {
+    if (_currentPosition == null) {
+      return const [];
+    }
+
+    final ranked = widget.locationManager.locations
+        .where(_isGasLocation)
+        .map(
+          (location) => MapEntry(
+            location,
+            calculateDistance(
+              _currentPosition!.latitude,
+              _currentPosition!.longitude,
+              location.latitude,
+              location.longitude,
+            ),
+          ),
+        )
+        .toList();
+
+    ranked.sort((a, b) => a.value.compareTo(b.value));
+    return ranked.take(8).toList();
+  }
+
+  String _distanceLabel(double distanceKm, String unit) {
+    if (unit == 'miles') {
+      final miles = distanceKm * 0.621371;
+      return '${miles.toStringAsFixed(1)} mi';
+    }
+    return '${distanceKm.toStringAsFixed(1)} km';
+  }
+
+  String _gasPriceLabel(RVLocation location) {
+    final combinedText = [
+      location.name,
+      location.details ?? '',
+      location.address ?? '',
+      ...location.reviews.map((review) => review.comment),
+    ].join(' ');
+
+    final match = RegExp(r'\$?\s*([2-9]\d?\.\d{2})').firstMatch(combinedText);
+    if (match != null) {
+      return '\$${match.group(1)} / gal';
+    }
+
+    return 'Price unavailable';
+  }
+
+  Widget _buildOverviewTile(BuildContext context, {
+    required IconData icon,
+    required String pageName,
+    required String summary,
+    required Color color,
+  }) {
+    return Container(
+      width: 165,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F9F7),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(height: 8),
+          Text(pageName, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Text(summary, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = widget.locationManager.users[widget.username];
@@ -3799,15 +5837,17 @@ class _DashboardPageState extends State<DashboardPage> {
       return const Center(child: Text('User not found'));
     }
 
+    final nearbyGas = _nearbyGasStations();
+    final distanceUnit = user.preferences.distanceUnit;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Welcome Banner
           Container(
             decoration: BoxDecoration(
-              gradient: LinearGradient(
+              gradient: const LinearGradient(
                 colors: [Color(0xFF1B5E4B), Color(0xFF2d8c7e)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -3819,212 +5859,132 @@ class _DashboardPageState extends State<DashboardPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Welcome back, ${user.username}!',
+                  'Trip Overview for ${user.username}',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  user.bio ?? 'Add a bio to your profile',
+                  user.bio ?? 'Everything at a glance across Explore, Social, Profile, and Settings.',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white70),
                 ),
               ],
             ),
           ),
-          
-          const SizedBox(height: 24),
-
-          // Profile Picture
-          Center(
-            child: Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Color(0xFF1B5E4B),
-                border: Border.all(color: Colors.white, width: 3),
-              ),
-              child: user.profilePicture != null
-                ? ClipOval(child: Image.network(user.profilePicture!, fit: BoxFit.cover, errorBuilder: (_, _, _) {
-                    return Center(child: Text(user.username[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.bold)));
-                  }))
-                : Center(child: Text(user.username[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.bold))),
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          // Stats Grid
-          Text('Your Stats', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            children: [
-              _buildStatCard(
-                context,
-                icon: Icons.location_on,
-                label: 'Locations Added',
-                value: user.locationsAdded.toString(),
-                color: Color(0xFF1B5E4B),
-              ),
-              _buildStatCard(
-                context,
-                icon: Icons.people,
-                label: 'Followers',
-                value: user.followers.length.toString(),
-                color: Color(0xFF2d8c7e),
-              ),
-              _buildStatCard(
-                context,
-                icon: Icons.person_add,
-                label: 'Following',
-                value: user.following.length.toString(),
-                color: Color(0xFF1B5E4B),
-              ),
-              _buildStatCard(
-                context,
-                icon: Icons.explore,
-                label: 'Posts',
-                value: user.adventures.length.toString(),
-                color: Color(0xFF2d8c7e),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 24),
-
-          // RV Info Section
-          if (user.rvMake != null)
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const SizedBox(height: 20),
+          Text('Page Overview', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: [
-                Text('Your RV', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                Container(
-                  decoration: BoxDecoration(
-                    color: Color(0xFFF5F9F7),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Color(0xFF1B5E4B).withValues(alpha: 0.2)),
-                  ),
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 60,
-                        height: 60,
-                        decoration: BoxDecoration(
-                          color: Color(0xFF1B5E4B),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(Icons.directions_car, color: Colors.white, size: 32),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('${user.rvYear} ${user.rvMake}', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
-                            Text(user.rvModel ?? '', style: Theme.of(context).textTheme.bodySmall),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+                _buildOverviewTile(
+                  context,
+                  icon: Icons.explore,
+                  pageName: 'Explore',
+                  summary: '${widget.locationManager.locations.length} mapped locations available',
+                  color: const Color(0xFF1B5E4B),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(width: 10),
+                _buildOverviewTile(
+                  context,
+                  icon: Icons.people,
+                  pageName: 'Social',
+                  summary: '${user.adventures.length} posts and ${user.followers.length} followers',
+                  color: const Color(0xFF2d8c7e),
+                ),
+                const SizedBox(width: 10),
+                _buildOverviewTile(
+                  context,
+                  icon: Icons.account_circle,
+                  pageName: 'Profile',
+                  summary: (user.hometown ?? '').isNotEmpty ? user.hometown! : 'Add hometown and media highlights',
+                  color: const Color(0xFF1565C0),
+                ),
+                const SizedBox(width: 10),
+                _buildOverviewTile(
+                  context,
+                  icon: Icons.settings,
+                  pageName: 'Settings',
+                  summary: '${user.preferences.shareLocation ? 'Location sharing on' : 'Location sharing off'} • ${distanceUnit == 'miles' ? 'Miles' : 'Kilometers'}',
+                  color: const Color(0xFF6A1B9A),
+                ),
               ],
             ),
-
-          // Quick Actions
-          Text('Explore', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: GestureDetector(
-                  onTap: () {
-                    // Navigate to locations - would need to be handled by parent
-                  },
-                  child: _buildQuickActionCard(
-                    context,
-                    icon: Icons.location_on,
-                    label: 'Browse\nLocations',
-                    color: Color(0xFF1B5E4B),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () {
-                    // Navigate to map - would need to be handled by parent
-                  },
-                  child: _buildQuickActionCard(
-                    context,
-                    icon: Icons.map,
-                    label: 'View\nMap',
-                    color: Color(0xFF2d8c7e),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () {
-                    // Navigate to social - would need to be handled by parent
-                  },
-                  child: _buildQuickActionCard(
-                    context,
-                    icon: Icons.people,
-                    label: 'Check\nSocial',
-                    color: Color(0xFF1B5E4B),
-                  ),
-                ),
-              ),
-            ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatCard(BuildContext context, {required IconData icon, required String label, required String value, required Color color}) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Color(0xFFF5F9F7),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.2)),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 32, color: color),
+          const SizedBox(height: 20),
+          Text('Nearby Gas Prices', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          if (_loadingLocation)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(width: 12),
+                    Expanded(child: Text('Finding your current location to load nearby gas stations...')),
+                  ],
+                ),
+              ),
+            )
+          else if (_locationError != null)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_locationError!, style: Theme.of(context).textTheme.bodyMedium),
+                    const SizedBox(height: 10),
+                    TextButton.icon(
+                      onPressed: _loadCurrentLocation,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Try Again'),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else if (nearbyGas.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('No surrounding gas stations found yet. Open Explore to load nearby locations, then return here.'),
+              ),
+            )
+          else
+            Column(
+              children: nearbyGas
+                  .map(
+                    (entry) => Card(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      child: ListTile(
+                        leading: const CircleAvatar(
+                          backgroundColor: Color(0xFFFEEAD8),
+                          child: Icon(Icons.local_gas_station, color: Color(0xFFEF6C00)),
+                        ),
+                        title: Text(entry.key.name),
+                        subtitle: Text(
+                          '${_gasPriceLabel(entry.key)} • ${_distanceLabel(entry.value, distanceUnit)}\n${entry.key.address ?? entry.key.type}',
+                        ),
+                        isThreeLine: true,
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
           const SizedBox(height: 8),
-          Text(value, style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: color, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          Text(label, style: Theme.of(context).textTheme.bodySmall, textAlign: TextAlign.center),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildQuickActionCard(BuildContext context, {required IconData icon, required String label, required Color color}) {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [color, color.withValues(alpha: 0.7)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 28, color: Colors.white),
-          const SizedBox(height: 8),
-          Text(label, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+          if (user.rvMake != null)
+            Card(
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFFE4F2EE),
+                  child: Icon(Icons.directions_car, color: Color(0xFF1B5E4B)),
+                ),
+                title: Text('${user.rvYear} ${user.rvMake}'),
+                subtitle: Text(user.rvModel ?? 'RV details in profile'),
+              ),
+            ),
         ],
       ),
     );
@@ -4049,6 +6009,12 @@ class SocialPage extends StatefulWidget {
 }
 
 class _SocialPageState extends State<SocialPage> {
+  bool _canViewProfileDetails(RVUser profileUser) {
+    if (profileUser.username == widget.username) {
+      return true;
+    }
+    return profileUser.preferences.showProfilePublicly;
+  }
   @override
   Widget build(BuildContext context) {
     final currentUser = widget.locationManager.users[widget.username];
@@ -4585,6 +6551,7 @@ class _SocialPageState extends State<SocialPage> {
     final isOwnProfile = profileUsername == widget.username;
     final isFollowing = currentUser.following.contains(profileUsername);
     final hasPendingRequest = profileUser.followRequests.contains(widget.username);
+    final canViewDetails = _canViewProfileDetails(profileUser);
 
     showDialog(
       context: context,
@@ -4604,14 +6571,27 @@ class _SocialPageState extends State<SocialPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (profileUser.bio != null && profileUser.bio!.trim().isNotEmpty)
+              if (!canViewDetails)
+                Text(
+                  'This user has hidden their profile details.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                )
+              else if (profileUser.bio != null && profileUser.bio!.trim().isNotEmpty)
                 Text(profileUser.bio!)
               else
                 Text('No bio yet.', style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 12),
-              Text('${profileUser.locationsAdded} locations • ${profileUser.adventures.length} posts'),
+              Text(
+                canViewDetails
+                    ? '${profileUser.locationsAdded} locations • ${profileUser.adventures.length} adventures'
+                    : 'Limited profile view',
+              ),
               const SizedBox(height: 6),
-              Text('${profileUser.followers.length} followers • ${profileUser.following.length} following'),
+              Text(
+                canViewDetails
+                    ? '${profileUser.followers.length} followers • ${profileUser.following.length} following'
+                    : '${profileUser.followers.length} followers',
+              ),
               const SizedBox(height: 8),
               Text(
                 profileUser.preferences.requireFollowApproval
@@ -4695,6 +6675,39 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
+  Future<void> _setProAccess(RVUser user, bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    user.updateSubscription(value);
+    await prefs.setBool('has_pro_access', value);
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+    widget.onUpdate();
+  }
+
+  Future<void> _signOut() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('onboarding_done');
+    await prefs.remove('username');
+    await prefs.remove('email');
+    await prefs.remove('password');
+    await prefs.remove('rig_height_ft');
+    await prefs.remove('rig_weight_lbs');
+    await prefs.remove('rig_length_ft');
+    await prefs.remove('is_towing');
+    await prefs.remove('has_pro_access');
+
+    if (!mounted) {
+      return;
+    }
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AppEntryPage()),
+      (route) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = widget.locationManager.users[widget.username];
@@ -4778,6 +6791,49 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: 12),
             _buildPendingLocationApprovalSection(),
           ],
+          const SizedBox(height: 20),
+
+          Text('Subscription', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    user.hasProAccess ? 'Current Plan: Pro' : 'Current Plan: Free',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    user.hasProAccess
+                        ? 'Includes advanced RV-safe stop sequencing and full offline region caching.'
+                        : 'Includes core RV safety checks and one offline cache region.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: user.hasProAccess ? null : () => _setProAccess(user, true),
+                          child: const Text('Upgrade to Pro'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: user.hasProAccess ? () => _setProAccess(user, false) : null,
+                          child: const Text('Use Free Plan'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 20),
 
           // Map Preferences
@@ -4892,6 +6948,20 @@ class _SettingsPageState extends State<SettingsPage> {
                     ],
                   ),
                 ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _signOut,
+              icon: const Icon(Icons.logout),
+              label: const Text('Sign Out'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFFB42318),
+                side: const BorderSide(color: Color(0xFFB42318)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
           ),
