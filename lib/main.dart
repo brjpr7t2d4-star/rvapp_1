@@ -758,6 +758,16 @@ class WelcomePage extends StatelessWidget {
     }
   }
 
+  Future<void> _openSignIn(BuildContext context) async {
+    final username = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const SignInPage()),
+    );
+
+    if (username != null && username.trim().isNotEmpty) {
+      onSignup(username);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -801,6 +811,12 @@ class WelcomePage extends StatelessWidget {
                   onPressed: () => _openSignup(context),
                   icon: const Icon(Icons.person_add_alt_1_rounded),
                   label: const Text('Create Account'),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: () => _openSignIn(context),
+                  icon: const Icon(Icons.login_rounded),
+                  label: const Text('Sign In'),
                 ),
                 const SizedBox(height: 12),
                 TextButton(
@@ -874,6 +890,72 @@ class _SignupPageState extends State<SignupPage> {
             ElevatedButton(
               onPressed: _submit,
               child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SignInPage extends StatefulWidget {
+  const SignInPage({super.key});
+
+  @override
+  State<SignInPage> createState() => _SignInPageState();
+}
+
+class _SignInPageState extends State<SignInPage> {
+  final TextEditingController _usernameController = TextEditingController();
+  String? _errorText;
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final username = _usernameController.text.trim();
+    if (username.length < 3) {
+      setState(() {
+        _errorText = 'Username must be at least 3 characters';
+      });
+      return;
+    }
+
+    Navigator.of(context).pop(username);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Sign In')),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Welcome back! Enter your username to sign in.',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _usernameController,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit(),
+              decoration: InputDecoration(
+                labelText: 'Username',
+                hintText: 'e.g. RoadNomad',
+                errorText: _errorText,
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _submit,
+              child: const Text('Sign In'),
             ),
           ],
         ),
@@ -3857,7 +3939,7 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
 
           // Quick Actions
-          Text('Quick Access', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+          Text('Explore', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
           Row(
             children: [
