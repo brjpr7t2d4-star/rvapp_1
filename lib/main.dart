@@ -13,6 +13,7 @@ import 'dart:math';
 
 const bool kSeedSampleLocations = false;
 const String kGoogleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
+const String kCustomAppBackgroundImageKey = 'custom_app_background_image_url';
 
 bool get hasGoogleMapsApiKey => kGoogleMapsApiKey.trim().isNotEmpty;
 
@@ -914,7 +915,18 @@ class WelcomePage extends StatelessWidget {
     );
 
     if (username != null && username.trim().isNotEmpty) {
-      onSignup(username);
+      onSignup(
+        SignupResult(
+          username: username.trim(),
+          email: '${username.trim().toLowerCase()}@nomad.local',
+          password: 'signin-mode',
+          rigHeightFt: 12.0,
+          rigWeightLbs: 18000,
+          rigLengthFt: 32.0,
+          isTowing: false,
+          hasProAccess: false,
+        ),
+      );
     }
   }
 
@@ -1225,6 +1237,24 @@ class SignInPage extends StatefulWidget {
 class _SignInPageState extends State<SignInPage> {
   final TextEditingController _usernameController = TextEditingController();
   String? _errorText;
+  String? _backgroundImageUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBackgroundImage();
+  }
+
+  Future<void> _loadBackgroundImage() async {
+    final prefs = await SharedPreferences.getInstance();
+    final url = prefs.getString(kCustomAppBackgroundImageKey)?.trim();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _backgroundImageUrl = (url ?? '').isEmpty ? null : url;
+    });
+  }
 
   @override
   void dispose() {
@@ -1246,36 +1276,68 @@ class _SignInPageState extends State<SignInPage> {
 
   @override
   Widget build(BuildContext context) {
+    final formContent = Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Welcome back! Enter your username to sign in.',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _usernameController,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _submit(),
+                  decoration: InputDecoration(
+                    labelText: 'Username',
+                    hintText: 'e.g. RoadNomad',
+                    errorText: _errorText,
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: _submit,
+                  child: const Text('Sign In'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final hasBackground = (_backgroundImageUrl ?? '').isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Sign In')),
       body: Padding(
         padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Welcome back! Enter your username to sign in.',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: _usernameController,
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) => _submit(),
-              decoration: InputDecoration(
-                labelText: 'Username',
-                hintText: 'e.g. RoadNomad',
-                errorText: _errorText,
-                border: const OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _submit,
-              child: const Text('Sign In'),
-            ),
-          ],
-        ),
+        child: hasBackground
+            ? Container(
+                decoration: BoxDecoration(
+                  image: DecorationImage(
+                    image: NetworkImage(_backgroundImageUrl!),
+                    fit: BoxFit.cover,
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: formContent,
+                ),
+              )
+            : formContent,
       ),
     );
   }
@@ -1310,7 +1372,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   late RVLocationManager locationManager;
-  int _selectedIndex = 1;
+  int _selectedIndex = 2;
   late final String _currentUsername;
 
   @override
@@ -1553,12 +1615,12 @@ class _HomePageState extends State<HomePage> {
                   label: 'Explore',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.home),
-                  label: 'Home',
-                ),
-                NavigationDestination(
                   icon: Icon(Icons.people),
                   label: 'Social',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.home),
+                  label: 'Home',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.account_circle),
@@ -1585,9 +1647,9 @@ class _HomePageState extends State<HomePage> {
           onUpdate: () => setState(() {}),
         );
       case 1:
-        return DashboardPage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
-      case 2:
         return SocialPage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
+      case 2:
+        return DashboardPage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
       case 3:
         return ProfilePage(locationManager: locationManager, username: _currentUsername, onUpdate: () => setState(() {}));
       case 4:
@@ -5690,11 +5752,24 @@ class _DashboardPageState extends State<DashboardPage> {
   Position? _currentPosition;
   bool _loadingLocation = false;
   String? _locationError;
+  String? _backgroundImageUrl;
 
   @override
   void initState() {
     super.initState();
+    _loadBackgroundImage();
     _loadCurrentLocation();
+  }
+
+  Future<void> _loadBackgroundImage() async {
+    final prefs = await SharedPreferences.getInstance();
+    final url = prefs.getString(kCustomAppBackgroundImageKey)?.trim();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _backgroundImageUrl = (url ?? '').isEmpty ? null : url;
+    });
   }
 
   Future<void> _loadCurrentLocation() async {
@@ -5840,7 +5915,7 @@ class _DashboardPageState extends State<DashboardPage> {
     final nearbyGas = _nearbyGasStations();
     final distanceUnit = user.preferences.distanceUnit;
 
-    return SingleChildScrollView(
+    final content = SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -5986,6 +6061,26 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
             ),
         ],
+      ),
+    );
+
+    final hasBackground = (_backgroundImageUrl ?? '').isNotEmpty;
+    if (!hasBackground) {
+      return content;
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        image: DecorationImage(
+          image: NetworkImage(_backgroundImageUrl!),
+          fit: BoxFit.cover,
+        ),
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.22),
+        ),
+        child: content,
       ),
     );
   }
@@ -6675,6 +6770,50 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
+  final TextEditingController _backgroundPhotoController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCustomBackgroundPhoto();
+  }
+
+  @override
+  void dispose() {
+    _backgroundPhotoController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadCustomBackgroundPhoto() async {
+    final prefs = await SharedPreferences.getInstance();
+    final url = prefs.getString(kCustomAppBackgroundImageKey) ?? '';
+    if (!mounted) {
+      return;
+    }
+    _backgroundPhotoController.text = url;
+  }
+
+  Future<void> _saveCustomBackgroundPhoto() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = _backgroundPhotoController.text.trim();
+    if (value.isEmpty) {
+      await prefs.remove(kCustomAppBackgroundImageKey);
+    } else {
+      await prefs.setString(kCustomAppBackgroundImageKey, value);
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(value.isEmpty ? 'Background photo removed.' : 'Background photo updated.'),
+      ),
+    );
+    widget.onUpdate();
+  }
+
   Future<void> _setProAccess(RVUser user, bool value) async {
     final prefs = await SharedPreferences.getInstance();
     user.updateSubscription(value);
@@ -6826,6 +6965,51 @@ class _SettingsPageState extends State<SettingsPage> {
                         child: OutlinedButton(
                           onPressed: user.hasProAccess ? () => _setProAccess(user, false) : null,
                           child: const Text('Use Free Plan'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          Text('App Background Photo', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Set one photo URL for Sign In and Home backgrounds.'),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _backgroundPhotoController,
+                    decoration: const InputDecoration(
+                      labelText: 'Photo URL',
+                      hintText: 'https://example.com/your-photo.jpg',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _saveCustomBackgroundPhoto,
+                          child: const Text('Save Photo'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () {
+                            _backgroundPhotoController.clear();
+                            _saveCustomBackgroundPhoto();
+                          },
+                          child: const Text('Remove Photo'),
                         ),
                       ),
                     ],
