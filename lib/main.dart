@@ -296,15 +296,17 @@ class RVUser {
 
   RVUser({
     required this.username,
-    this.email,
-    this.password,
+    String? email,
+    String? password,
     this.rigHeightFt,
     this.rigWeightLbs,
     this.rigLengthFt,
     this.isTowing = false,
     this.hasProAccess = false,
   })
-      : reviews = [],
+      : email = _normalizeNullableText(email),
+        password = _normalizeNullableText(password),
+        reviews = [],
         locationsAdded = 0,
         rvMake = null,
         rvModel = null,
@@ -330,9 +332,9 @@ class RVUser {
   }
 
   void updateRVInfo(String make, String model, String year) {
-    rvMake = make;
-    rvModel = model;
-    rvYear = year;
+    rvMake = _normalizeNullableText(make);
+    rvModel = _normalizeNullableText(model);
+    rvYear = _normalizeNullableText(year);
   }
 
   void followUser(String userToFollow) {
@@ -373,27 +375,38 @@ class RVUser {
   }
 
   void addPhoto(String photoPath) {
-    photos.add(photoPath);
+    final normalized = _normalizeNullableText(photoPath);
+    if (normalized != null) {
+      photos.add(normalized);
+    }
   }
 
   void updateBio(String newBio) {
-    bio = newBio;
+    bio = _normalizeNullableText(newBio);
   }
 
   void updateHometown(String newHometown) {
-    hometown = newHometown;
+    hometown = _normalizeNullableText(newHometown);
   }
 
   void updateProfilePicture(String picturePath) {
-    profilePicture = picturePath;
+    profilePicture = _normalizeNullableText(picturePath);
   }
 
   void addSocial(String platform, String handle) {
-    socials[platform] = handle;
+    final normalizedPlatform = _normalizeNullableText(platform);
+    final normalizedHandle = _normalizeNullableText(handle);
+    if (normalizedPlatform == null || normalizedHandle == null) {
+      return;
+    }
+    socials[normalizedPlatform] = normalizedHandle;
   }
 
   void addVideo(String videoPath) {
-    videos.add(videoPath);
+    final normalized = _normalizeNullableText(videoPath);
+    if (normalized != null) {
+      videos.add(normalized);
+    }
   }
 
   void removeSocial(String platform) {
@@ -456,14 +469,6 @@ class _SocialFeedEntry {
     required this.username,
     required this.post,
   });
-}
-
-List<String> _parseMediaUrls(String rawValue) {
-  return rawValue
-      .split(RegExp(r'[\n,]'))
-      .map((value) => value.trim())
-      .where((value) => value.isNotEmpty)
-      .toList();
 }
 
 Widget _buildMediaAttachments(
@@ -2315,8 +2320,8 @@ class _LocationsListPageState extends State<LocationsListPage> {
 
               final titleParts = [locality, adminArea]
                   .whereType<String>()
-                  .map((part) => part.trim())
-                  .where((part) => part.isNotEmpty)
+                  .map((part) => _normalizeNullableText(part))
+                  .whereType<String>()
                   .toList();
 
               if (titleParts.isNotEmpty) {
@@ -2345,8 +2350,8 @@ class _LocationsListPageState extends State<LocationsListPage> {
             place.country,
           ]
               .whereType<String>()
-              .map((part) => part.trim())
-              .where((part) => part.isNotEmpty)
+              .map((part) => _normalizeNullableText(part))
+              .whereType<String>()
               .toList();
 
           if (titleParts.isNotEmpty) {
@@ -2362,8 +2367,8 @@ class _LocationsListPageState extends State<LocationsListPage> {
             place.country,
           ]
               .whereType<String>()
-              .map((part) => part.trim())
-              .where((part) => part.isNotEmpty)
+              .map((part) => _normalizeNullableText(part))
+              .whereType<String>()
               .toList();
 
           if (addressParts.isNotEmpty) {
@@ -2547,7 +2552,7 @@ class _LocationsListPageState extends State<LocationsListPage> {
           'type': mappedType,
           'lat': lat,
           'lon': lon,
-          'address': place['vicinity']?.toString(),
+          'address': _normalizeNullableText(place['vicinity']?.toString()),
           'distance': calculateDistance(position.latitude, position.longitude, lat, lon),
         };
       }
@@ -2741,9 +2746,8 @@ out center 80;
           tags['addr:state'],
           tags['addr:postcode'],
         ]
-            .whereType<dynamic>()
-            .map((part) => part.toString().trim())
-            .where((part) => part.isNotEmpty)
+            .map((part) => _normalizeNullableText(part?.toString()))
+            .whereType<String>()
             .toList();
 
         final distanceKm = calculateDistance(
@@ -5702,58 +5706,118 @@ class _ProfilePageState extends State<ProfilePage> {
       return const Center(child: Text('Profile not found'));
     }
 
+    final theme = Theme.of(context);
+    final hasProfilePicture = (user.profilePicture ?? '').trim().isNotEmpty;
+    final emailText = (user.email ?? '').trim().isEmpty ? 'No email on file' : user.email!.trim();
+    final hometownText = (user.hometown ?? '').trim().isEmpty ? 'Add your hometown' : user.hometown!.trim();
+    final bioText = (user.bio ?? '').trim().isEmpty ? 'No bio yet. Add your story!' : user.bio!.trim();
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Card(
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF0F4C81), Color(0xFF2668A7)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(18),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  CircleAvatar(
-                    radius: 42,
-                    backgroundColor: const Color(0xFF0F4C81),
-                    backgroundImage: (user.profilePicture ?? '').trim().isNotEmpty
-                        ? NetworkImage(user.profilePicture!.trim())
-                        : null,
-                    child: (user.profilePicture ?? '').trim().isNotEmpty
-                        ? null
-                        : Text(
-                            user.username.isEmpty ? '?' : user.username[0].toUpperCase(),
-                            style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.bold),
-                          ),
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 34,
+                        backgroundColor: Colors.white.withValues(alpha: 0.18),
+                        backgroundImage: hasProfilePicture ? NetworkImage(user.profilePicture!.trim()) : null,
+                        child: hasProfilePicture
+                            ? null
+                            : Text(
+                                user.username.isEmpty ? '?' : user.username[0].toUpperCase(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              user.username,
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              emailText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              hometownText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    user.username,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      _buildStatChip(Icons.place_outlined, 'Places Added', user.locationsAdded.toString()),
+                      _buildStatChip(Icons.star_border, 'Reviews', user.reviews.length.toString()),
+                      _buildStatChip(Icons.group_outlined, 'Followers', user.followers.length.toString()),
+                      _buildStatChip(Icons.person_add_alt_1, 'Following', user.following.length.toString()),
+                    ],
                   ),
-                  const SizedBox(height: 6),
-                  Text(user.email ?? 'No email on file', style: Theme.of(context).textTheme.bodySmall),
-                  const SizedBox(height: 4),
-                  Text(
-                    (user.hometown ?? '').trim().isEmpty ? 'No hometown added' : 'Hometown: ${user.hometown}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 12),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Profile Visible To Everyone'),
-                    subtitle: Text(
-                      user.preferences.showProfilePublicly
-                          ? 'Anyone can view your profile details.'
-                          : 'Your detailed profile info is hidden from other users.',
-                      style: Theme.of(context).textTheme.bodySmall,
+                  const SizedBox(height: 14),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    value: user.preferences.showProfilePublicly,
-                    onChanged: (value) {
-                      setState(() {
-                        user.preferences.showProfilePublicly = value;
-                      });
-                      widget.onUpdate();
-                    },
+                    child: SwitchListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                      title: const Text(
+                        'Public profile visibility',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        user.preferences.showProfilePublicly
+                            ? 'Other users can see your full profile.'
+                            : 'Other users see limited profile details.',
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      value: user.preferences.showProfilePublicly,
+                      activeThumbColor: const Color(0xFF7BE495),
+                      onChanged: (value) {
+                        setState(() {
+                          user.preferences.showProfilePublicly = value;
+                        });
+                        widget.onUpdate();
+                      },
+                    ),
                   ),
                 ],
               ),
@@ -5761,7 +5825,7 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
           if (!user.preferences.showProfilePublicly)
             Padding(
-              padding: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.only(top: 12),
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
@@ -5777,202 +5841,201 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
             ),
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('About Me', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                      TextButton.icon(
-                        onPressed: () => _showEditAboutDialog(user),
-                        icon: const Icon(Icons.edit, size: 16),
-                        label: const Text('Edit'),
-                      ),
-                    ],
-                  ),
-                  Text(
-                    (user.bio ?? '').trim().isEmpty ? 'No bio yet. Add your story!' : user.bio!,
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ],
-              ),
+          _buildSectionCard(
+            title: 'About Me',
+            actionLabel: 'Edit',
+            actionIcon: Icons.edit,
+            onActionTap: () => _showEditAboutDialog(user),
+            child: Text(
+              bioText,
+              style: theme.textTheme.bodyMedium,
             ),
           ),
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('RV Details', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                      TextButton.icon(
-                        onPressed: () => _showEditRvDialog(user),
-                        icon: const Icon(Icons.edit, size: 16),
-                        label: const Text('Edit'),
-                      ),
-                    ],
-                  ),
-                  Text('${user.rvYear ?? 'Year'} ${user.rvMake ?? 'Make'} ${user.rvModel ?? 'Model'}'.trim()),
-                ],
-              ),
+          _buildSectionCard(
+            title: 'RV Details',
+            actionLabel: 'Edit',
+            actionIcon: Icons.edit,
+            onActionTap: () => _showEditRvDialog(user),
+            child: Text(
+              _rvDetailsText(user),
+              style: theme.textTheme.bodyMedium,
             ),
           ),
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Photos', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                      TextButton.icon(
-                        onPressed: () => _showAddMediaDialog(user, mediaType: 'photo'),
-                        icon: const Icon(Icons.add, size: 16),
-                        label: const Text('Add'),
-                      ),
-                    ],
-                  ),
-                  if (user.photos.isEmpty)
-                    Text('No photos yet', style: Theme.of(context).textTheme.bodySmall)
-                  else
-                    SizedBox(
-                      height: 110,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: user.photos.length,
-                        separatorBuilder: (_, _) => const SizedBox(width: 10),
-                        itemBuilder: (context, index) {
-                          final url = user.photos[index];
-                          return Stack(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: _buildMediaImage(url, width: 140, height: 110),
-                              ),
-                              Positioned(
-                                right: 4,
-                                top: 4,
-                                child: InkWell(
-                                  onTap: () {
-                                    setState(() => user.photos.removeAt(index));
-                                    widget.onUpdate();
-                                  },
-                                  child: Container(
-                                    decoration: const BoxDecoration(color: Color(0xAA000000), shape: BoxShape.circle),
-                                    padding: const EdgeInsets.all(4),
-                                    child: const Icon(Icons.close, size: 14, color: Colors.white),
+          _buildSectionCard(
+            title: 'Photos',
+            actionLabel: 'Add',
+            actionIcon: Icons.add,
+            onActionTap: () => _showAddMediaDialog(user, mediaType: 'photo'),
+            child: user.photos.isEmpty
+                ? Text('No photos yet', style: theme.textTheme.bodySmall)
+                : SizedBox(
+                    height: 116,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: user.photos.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 10),
+                      itemBuilder: (context, index) {
+                        final url = user.photos[index];
+                        return Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: _buildMediaImage(url, width: 146, height: 116),
+                            ),
+                            Positioned(
+                              right: 5,
+                              top: 5,
+                              child: InkWell(
+                                onTap: () {
+                                  setState(() => user.photos.removeAt(index));
+                                  widget.onUpdate();
+                                },
+                                child: Container(
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xAA000000),
+                                    shape: BoxShape.circle,
                                   ),
+                                  padding: const EdgeInsets.all(4),
+                                  child: const Icon(Icons.close, size: 14, color: Colors.white),
                                 ),
                               ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Videos', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                      TextButton.icon(
-                        onPressed: () => _showAddMediaDialog(user, mediaType: 'video'),
-                        icon: const Icon(Icons.add, size: 16),
-                        label: const Text('Add'),
-                      ),
-                    ],
-                  ),
-                  if (user.videos.isEmpty)
-                    Text('No videos yet', style: Theme.of(context).textTheme.bodySmall)
-                  else
-                    Column(
-                      children: user.videos.asMap().entries.map((entry) {
-                        final index = entry.key;
-                        final videoUrl = entry.value;
-                        return ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.play_circle_outline),
-                          title: Text(
-                            videoUrl,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          trailing: IconButton(
-                            onPressed: () {
-                              setState(() => user.videos.removeAt(index));
-                              widget.onUpdate();
-                            },
-                            icon: const Icon(Icons.delete_outline),
-                          ),
+                            ),
+                          ],
                         );
-                      }).toList(),
+                      },
                     ),
-                ],
-              ),
-            ),
+                  ),
           ),
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Social Links', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                      TextButton.icon(
-                        onPressed: () => _showAddSocialDialog(user),
-                        icon: const Icon(Icons.add, size: 16),
-                        label: const Text('Add'),
-                      ),
-                    ],
-                  ),
-                  if (user.socials.isEmpty)
-                    Text('No social links yet', style: Theme.of(context).textTheme.bodySmall)
-                  else
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: user.socials.entries.map((entry) {
-                        return InputChip(
-                          label: Text('${entry.key}: ${entry.value}'),
-                          onDeleted: () {
-                            setState(() => user.removeSocial(entry.key));
+          _buildSectionCard(
+            title: 'Videos',
+            actionLabel: 'Add',
+            actionIcon: Icons.add,
+            onActionTap: () => _showAddMediaDialog(user, mediaType: 'video'),
+            child: user.videos.isEmpty
+                ? Text('No videos yet', style: theme.textTheme.bodySmall)
+                : Column(
+                    children: user.videos.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final videoUrl = entry.value;
+                      return ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.play_circle_outline),
+                        title: Text(
+                          videoUrl,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: IconButton(
+                          onPressed: () {
+                            setState(() => user.videos.removeAt(index));
                             widget.onUpdate();
                           },
-                        );
-                      }).toList(),
-                    ),
-                ],
-              ),
+                          icon: const Icon(Icons.delete_outline),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+          ),
+          const SizedBox(height: 16),
+          _buildSectionCard(
+            title: 'Social Links',
+            actionLabel: 'Add',
+            actionIcon: Icons.add,
+            onActionTap: () => _showAddSocialDialog(user),
+            child: user.socials.isEmpty
+                ? Text('No social links yet', style: theme.textTheme.bodySmall)
+                : Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: user.socials.entries.map((entry) {
+                      return InputChip(
+                        label: Text('${entry.key}: ${entry.value}'),
+                        onDeleted: () {
+                          setState(() => user.removeSocial(entry.key));
+                          widget.onUpdate();
+                        },
+                      );
+                    }).toList(),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionCard({
+    required String title,
+    required String actionLabel,
+    required IconData actionIcon,
+    required VoidCallback onActionTap,
+    required Widget child,
+  }) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                TextButton.icon(
+                  onPressed: onActionTap,
+                  icon: Icon(actionIcon, size: 16),
+                  label: Text(actionLabel),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatChip(IconData icon, String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.white70),
+          const SizedBox(width: 6),
+          Text(
+            '$label: $value',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
       ),
     );
+  }
+
+  String _rvDetailsText(RVUser user) {
+    final parts = [user.rvYear, user.rvMake, user.rvModel]
+        .map((part) => _normalizeNullableText(part))
+        .whereType<String>()
+        .toList();
+    if (parts.isEmpty) {
+      return 'No RV details added yet';
+    }
+    return parts.join(' ');
   }
 
   void _showEditAboutDialog(RVUser user) {
@@ -7834,7 +7897,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('Followers'),
-                      Text('${user.followers.length ?? 0}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      Text('${user.followers.length}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -7842,7 +7905,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('Following'),
-                      Text('${user.following.length ?? 0}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      Text('${user.following.length}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     ],
                   ),
                 ],
@@ -8157,82 +8220,6 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  void _showPhotoOptions(RVUser user) {
-    showDialog(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('Add Photo'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () {
-              Navigator.pop(context);
-              _showPhotoUrlDialog(user);
-            },
-            child: const Row(
-              children: [
-                Icon(Icons.link),
-                SizedBox(width: 12),
-                Text('Add from URL'),
-              ],
-            ),
-          ),
-          SimpleDialogOption(
-            onPressed: () {
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Photo gallery integration coming soon')),
-              );
-            },
-            child: const Row(
-              children: [
-                Icon(Icons.photo_library),
-                SizedBox(width: 12),
-                Text('Choose from Gallery'),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showPhotoUrlDialog(RVUser user) {
-    final controller = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Photo URL'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: 'Enter photo URL',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (controller.text.isNotEmpty) {
-                user.addPhoto(controller.text);
-                widget.onUpdate();
-                Navigator.pop(context);
-                setState(() {});
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Photo added!')),
-                );
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showEditProfileDialog(RVUser user) {
     final bioController = TextEditingController(text: user.bio ?? '');
     final profilePicController = TextEditingController(text: user.profilePicture ?? '');
@@ -8289,12 +8276,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       decoration: InputDecoration(
                         hintText: 'Handle or URL',
                         border: OutlineInputBorder(),
-                        suffix: IconButton(
-                          icon: const Icon(Icons.add),
-                          onPressed: () {
-                            final textField = context.findRenderObject() as RenderBox?;
-                          },
-                        ),
                       ),
                     ),
                   ),
