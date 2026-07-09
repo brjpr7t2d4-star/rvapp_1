@@ -6198,34 +6198,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       _buildStatChip(Icons.person_add_alt_1, 'Following', user.following.length.toString()),
                     ],
                   ),
-                  const SizedBox(height: 14),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: SwitchListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-                      title: const Text(
-                        'Public profile visibility',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text(
-                        user.preferences.showProfilePublicly
-                            ? 'Other users can see your full profile.'
-                            : 'Other users see limited profile details.',
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                      value: user.preferences.showProfilePublicly,
-                      activeThumbColor: const Color(0xFF7BE495),
-                      onChanged: (value) {
-                        setState(() {
-                          user.preferences.showProfilePublicly = value;
-                        });
-                        widget.onUpdate();
-                      },
-                    ),
-                  ),
+                  const SizedBox(height: 2),
                 ],
               ),
             ),
@@ -9043,7 +9016,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _loadCustomBackgroundPhoto();
-    if (widget.username.toLowerCase() == 'admin') {
+    if (widget.username.trim().toLowerCase() == 'admin') {
       _loadSignupStats();
     }
   }
@@ -9295,6 +9268,19 @@ class _SettingsPageState extends State<SettingsPage> {
             },
           ),
           SwitchListTile(
+            title: const Text('Public Profile Visibility'),
+            subtitle: Text(
+              prefs.showProfilePublicly
+                  ? 'Other users can view your full profile details'
+                  : 'Only limited profile details are shown to others',
+            ),
+            value: prefs.showProfilePublicly,
+            onChanged: (value) {
+              setState(() => prefs.showProfilePublicly = value);
+              widget.onUpdate();
+            },
+          ),
+          SwitchListTile(
             title: const Text('Allow Messages'),
             subtitle: const Text('Allow other users to message you'),
             value: prefs.allowMessages,
@@ -9316,7 +9302,7 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: 12),
             _buildFollowRequestsSection(user),
           ],
-          if (widget.username.toLowerCase() == 'admin') ...[
+          if (widget.username.trim().toLowerCase() == 'admin') ...[
             const SizedBox(height: 12),
             _buildPendingLocationApprovalSection(),
             const SizedBox(height: 12),
