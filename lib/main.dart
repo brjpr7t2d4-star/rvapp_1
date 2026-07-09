@@ -20,6 +20,37 @@ const String kSignupTrackingApiBaseUrl = String.fromEnvironment('SIGNUP_TRACKING
 bool get hasGoogleMapsApiKey => kGoogleMapsApiKey.trim().isNotEmpty;
 bool get hasSignupTrackingApiBaseUrl => kSignupTrackingApiBaseUrl.trim().isNotEmpty;
 
+Future<void> trackAnalyticsEvent({
+  required String eventName,
+  String? userId,
+  String? sessionId,
+  Map<String, dynamic>? properties,
+}) async {
+  if (!hasSignupTrackingApiBaseUrl) {
+    return;
+  }
+
+  final endpoint = Uri.parse('${kSignupTrackingApiBaseUrl.trim()}/api/analytics/events');
+  try {
+    await http
+        .post(
+          endpoint,
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'eventName': eventName,
+            'userId': userId,
+            'sessionId': sessionId,
+            'platform': defaultTargetPlatform.name,
+            'properties': properties ?? const <String, dynamic>{},
+            'occurredAt': DateTime.now().toUtc().toIso8601String(),
+          }),
+        )
+        .timeout(const Duration(seconds: 3));
+  } catch (_) {
+    // Do not block app usage if analytics endpoint is unreachable.
+  }
+}
+
 void main() {
   runApp(const RVOwnerApp());
 }
@@ -933,6 +964,15 @@ class _AppEntryPageState extends State<AppEntryPage> {
             }),
           )
           .timeout(const Duration(seconds: 3));
+
+      await trackAnalyticsEvent(
+        eventName: 'signup_completed',
+        userId: username,
+        properties: {
+          'hasProAccess': signup.hasProAccess,
+          'isTowing': signup.isTowing,
+        },
+      );
     } catch (_) {
       // Ignore telemetry failures so account creation still succeeds offline.
     }
@@ -1474,6 +1514,14 @@ class _HomePageState extends State<HomePage> {
   int _selectedIndex = 2;
   late final String _currentUsername;
 
+  static const List<String> _tabNames = <String>[
+    'Explore',
+    'Social',
+    'Home',
+    'Profile',
+    'Settings',
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -1490,6 +1538,13 @@ class _HomePageState extends State<HomePage> {
       hasProAccess: widget.initialHasProAccess,
     );
     _initializeSampleData();
+    unawaited(
+      trackAnalyticsEvent(
+        eventName: 'app_opened',
+        userId: _currentUsername,
+        properties: {'initialTab': _tabNames[_selectedIndex]},
+      ),
+    );
   }
 
   void _initializeSampleData() {
@@ -1707,6 +1762,16 @@ class _HomePageState extends State<HomePage> {
                 setState(() {
                   _selectedIndex = index;
                 });
+                unawaited(
+                  trackAnalyticsEvent(
+                    eventName: 'navigation_tab_selected',
+                    userId: _currentUsername,
+                    properties: {
+                      'tabIndex': index,
+                      'tabName': _tabNames[index],
+                    },
+                  ),
+                );
               },
               destinations: const [
                 NavigationDestination(
@@ -3677,6 +3742,17 @@ class _AddLocationPageState extends State<AddLocationPage> {
           photos: _selectedPhotos,
           videos: _selectedVideos,
         );
+        unawaited(
+          trackAnalyticsEvent(
+            eventName: 'location_added',
+            userId: widget.username,
+            properties: {
+              'locationType': _selectedType,
+              'photoCount': _selectedPhotos.length,
+              'videoCount': _selectedVideos.length,
+            },
+          ),
+        );
       } else {
         widget.locationManager.submitLocationForApproval(
           _nameController.text,
@@ -3688,6 +3764,17 @@ class _AddLocationPageState extends State<AddLocationPage> {
           details: _detailsController.text.trim().isNotEmpty ? _detailsController.text.trim() : null,
           photos: _selectedPhotos,
           videos: _selectedVideos,
+        );
+        unawaited(
+          trackAnalyticsEvent(
+            eventName: 'location_submitted_for_review',
+            userId: widget.username,
+            properties: {
+              'locationType': _selectedType,
+              'photoCount': _selectedPhotos.length,
+              'videoCount': _selectedVideos.length,
+            },
+          ),
         );
       }
 

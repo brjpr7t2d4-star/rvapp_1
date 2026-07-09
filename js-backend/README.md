@@ -35,8 +35,28 @@ API endpoints:
 - `POST /api/signup-events` - store a new account creation event
 - `GET /api/signup-events` - list all signup events
 - `GET /api/signup-stats` - quick totals and daily counts
+- `POST /api/analytics/events` - store generic analytics events
+- `GET /api/analytics/events` - query analytics events (`eventName`, `userId`, `limit`)
+- `GET /api/analytics/overview` - aggregated analytics (`days` query param)
 
 Signup events are stored in `js-backend/data/signup-events.json`.
+Analytics events are stored in `js-backend/data/analytics-events.json`.
+
+Sample analytics event payload:
+
+```json
+{
+   "eventName": "screen_view",
+   "userId": "Alice123",
+   "sessionId": "ios-session-001",
+   "platform": "ios",
+   "properties": {
+      "screen": "Settings",
+      "source": "tab_bar"
+   },
+   "occurredAt": "2026-07-09T12:34:56.000Z"
+}
+```
 
 ### Connect Flutter App To Tracking API
 
