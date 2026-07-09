@@ -443,6 +443,8 @@ class Adventure {
   final String? locationType;
   final double? latitude;
   final double? longitude;
+  final List<String> likedBy;
+  final List<PostComment> comments;
 
   Adventure({
     required this.id,
@@ -457,8 +459,28 @@ class Adventure {
     this.locationType,
     this.latitude,
     this.longitude,
+    List<String>? likedBy,
+    List<PostComment>? comments,
   })  : photos = photos ?? [],
-        videos = videos ?? [];
+        videos = videos ?? [],
+        likedBy = likedBy ?? [],
+        comments = comments ?? [];
+
+  bool isLikedBy(String username) {
+    return likedBy.contains(username);
+  }
+
+  void toggleLike(String username) {
+    if (likedBy.contains(username)) {
+      likedBy.remove(username);
+    } else {
+      likedBy.add(username);
+    }
+  }
+
+  void addComment(PostComment comment) {
+    comments.add(comment);
+  }
 }
 
 class _SocialFeedEntry {
@@ -471,10 +493,67 @@ class _SocialFeedEntry {
   });
 }
 
+class PostComment {
+  final String id;
+  final String username;
+  final String text;
+  final DateTime createdAt;
+
+  PostComment({
+    required this.id,
+    required this.username,
+    required this.text,
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
+}
+
+class DirectMessage {
+  final String id;
+  final String threadId;
+  final String fromUsername;
+  final String toUsername;
+  final String text;
+  final DateTime sentAt;
+  bool isRead;
+
+  DirectMessage({
+    required this.id,
+    required this.threadId,
+    required this.fromUsername,
+    required this.toUsername,
+    required this.text,
+    DateTime? sentAt,
+    this.isRead = false,
+  }) : sentAt = sentAt ?? DateTime.now();
+}
+
+class UserNotification {
+  final String id;
+  final String username;
+  final String title;
+  final String body;
+  final String type;
+  final String? relatedUsername;
+  final DateTime createdAt;
+  bool isRead;
+
+  UserNotification({
+    required this.id,
+    required this.username,
+    required this.title,
+    required this.body,
+    required this.type,
+    this.relatedUsername,
+    DateTime? createdAt,
+    this.isRead = false,
+  }) : createdAt = createdAt ?? DateTime.now();
+}
+
 Widget _buildMediaAttachments(
   BuildContext context, {
   required List<String> photos,
   required List<String> videos,
+  void Function(int photoIndex, String photoUrl)? onPhotoTap,
 }) {
   if (photos.isEmpty && videos.isEmpty) {
     return const SizedBox.shrink();
@@ -492,9 +571,14 @@ Widget _buildMediaAttachments(
             itemCount: photos.length,
             separatorBuilder: (_, _) => const SizedBox(width: 10),
             itemBuilder: (context, index) {
-              return ClipRRect(
+              final photoUrl = photos[index];
+              return InkWell(
                 borderRadius: BorderRadius.circular(12),
-                child: _buildMediaImage(photos[index], width: 110, height: 110),
+                onTap: onPhotoTap == null ? null : () => onPhotoTap(index, photoUrl),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: _buildMediaImage(photoUrl, width: 110, height: 110),
+                ),
               );
             },
           ),
@@ -681,8 +765,34 @@ class RVLocationManager {
   final List<RVLocation> locations = [];
   final List<PendingLocationSubmission> pendingLocationSubmissions = [];
   final Map<String, RVUser> users = {};
+  final Map<String, List<DirectMessage>> directMessageThreads = {};
+  final Map<String, List<UserNotification>> userNotifications = {};
   int _idCounter = 0;
   int _pendingIdCounter = 0;
+  int _messageIdCounter = 0;
+  int _notificationIdCounter = 0;
+
+  String _threadId(String usernameA, String usernameB) {
+    final usersSorted = [usernameA, usernameB]..sort();
+    return '${usersSorted.first}__${usersSorted.last}';
+  }
+
+  UserNotification _createNotification({
+    required String username,
+    required String title,
+    required String body,
+    required String type,
+    String? relatedUsername,
+  }) {
+    return UserNotification(
+      id: 'notif_${_notificationIdCounter++}',
+      username: username,
+      title: title,
+      body: body,
+      type: type,
+      relatedUsername: relatedUsername,
+    );
+  }
 
   void createUser(
     String username, {
@@ -705,7 +815,187 @@ class RVLocationManager {
         isTowing: isTowing,
         hasProAccess: hasProAccess,
       );
+      userNotifications[username] = [];
     }
+  }
+
+  void sendDirectMessage({
+    required String fromUsername,
+    required String toUsername,
+    required String messageText,
+  }) {
+    final fromUser = users[fromUsername];
+    final toUser = users[toUsername];
+    final normalized = _normalizeNullableText(messageText);
+
+    if (fromUser == null || toUser == null) {
+      throw Exception('Unable to send message. User not found.');
+    }
+
+    if (fromUsername == toUsername) {
+      throw Exception('You cannot message yourself.');
+    }
+
+    if (normalized == null) {
+      throw Exception('Message cannot be empty.');
+    }
+
+    if (!toUser.preferences.allowMessages) {
+      throw Exception('@$toUsername is not accepting messages right now.');
+    }
+
+    final threadId = _threadId(fromUsername, toUsername);
+    final thread = directMessageThreads.putIfAbsent(threadId, () => []);
+
+    final message = DirectMessage(
+      id: 'msg_${_messageIdCounter++}',
+      threadId: threadId,
+      fromUsername: fromUsername,
+      toUsername: toUsername,
+      text: normalized,
+    );
+    thread.add(message);
+
+    final recipientNotifications = userNotifications.putIfAbsent(toUsername, () => []);
+    recipientNotifications.add(
+      _createNotification(
+        username: toUsername,
+        title: 'New message from @$fromUsername',
+        body: normalized.length > 80 ? '${normalized.substring(0, 80)}...' : normalized,
+        type: 'direct_message',
+        relatedUsername: fromUsername,
+      ),
+    );
+  }
+
+  List<DirectMessage> getThreadMessages(String usernameA, String usernameB) {
+    final threadId = _threadId(usernameA, usernameB);
+    final thread = directMessageThreads[threadId] ?? const <DirectMessage>[];
+    final copy = List<DirectMessage>.from(thread);
+    copy.sort((a, b) => a.sentAt.compareTo(b.sentAt));
+    return copy;
+  }
+
+  List<String> getConversationPeers(String username) {
+    final peers = <String>{};
+    for (final threadId in directMessageThreads.keys) {
+      final parts = threadId.split('__');
+      if (parts.length != 2) {
+        continue;
+      }
+
+      final first = parts[0];
+      final second = parts[1];
+      if (first == username) {
+        peers.add(second);
+      } else if (second == username) {
+        peers.add(first);
+      }
+    }
+
+    final peerList = peers.toList();
+    peerList.sort((a, b) {
+      final lastA = getLastMessage(username, a)?.sentAt;
+      final lastB = getLastMessage(username, b)?.sentAt;
+      if (lastA == null && lastB == null) {
+        return a.compareTo(b);
+      }
+      if (lastA == null) {
+        return 1;
+      }
+      if (lastB == null) {
+        return -1;
+      }
+      return lastB.compareTo(lastA);
+    });
+    return peerList;
+  }
+
+  DirectMessage? getLastMessage(String usernameA, String usernameB) {
+    final thread = getThreadMessages(usernameA, usernameB);
+    if (thread.isEmpty) {
+      return null;
+    }
+    return thread.last;
+  }
+
+  int getUnreadThreadMessageCount({
+    required String username,
+    required String peerUsername,
+  }) {
+    final thread = getThreadMessages(username, peerUsername);
+    return thread
+        .where((message) => message.toUsername == username && !message.isRead)
+        .length;
+  }
+
+  int getUnreadMessageNotificationCount(String username) {
+    final notifications = userNotifications[username] ?? const <UserNotification>[];
+    return notifications
+        .where((notification) => !notification.isRead && notification.type == 'direct_message')
+        .length;
+  }
+
+  int getUnreadNotificationCount(String username) {
+    final notifications = userNotifications[username] ?? const <UserNotification>[];
+    return notifications.where((notification) => !notification.isRead).length;
+  }
+
+  List<UserNotification> getNotificationsForUser(String username) {
+    final notifications = userNotifications[username] ?? const <UserNotification>[];
+    final copy = List<UserNotification>.from(notifications);
+    copy.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return copy;
+  }
+
+  void markThreadAsRead({
+    required String username,
+    required String peerUsername,
+  }) {
+    final threadId = _threadId(username, peerUsername);
+    final thread = directMessageThreads[threadId] ?? const <DirectMessage>[];
+    for (final message in thread) {
+      if (message.toUsername == username) {
+        message.isRead = true;
+      }
+    }
+
+    final notifications = userNotifications[username] ?? const <UserNotification>[];
+    for (final notification in notifications) {
+      if (notification.type == 'direct_message' && notification.relatedUsername == peerUsername) {
+        notification.isRead = true;
+      }
+    }
+  }
+
+  void markNotificationAsRead({
+    required String username,
+    required String notificationId,
+  }) {
+    final notifications = userNotifications[username] ?? const <UserNotification>[];
+    final index = notifications.indexWhere((notification) => notification.id == notificationId);
+    if (index >= 0) {
+      notifications[index].isRead = true;
+    }
+  }
+
+  void addNotificationForUser({
+    required String username,
+    required String title,
+    required String body,
+    required String type,
+    String? relatedUsername,
+  }) {
+    final notifications = userNotifications.putIfAbsent(username, () => []);
+    notifications.add(
+      _createNotification(
+        username: username,
+        title: title,
+        body: body,
+        type: type,
+        relatedUsername: relatedUsername,
+      ),
+    );
   }
 
   void addRVLocation(
@@ -1650,6 +1940,93 @@ class _HomePageState extends State<HomePage> {
     'Settings',
   ];
 
+  int _unreadNotificationCount() {
+    return locationManager.getUnreadNotificationCount(_currentUsername);
+  }
+
+  int _unreadInboxCount() {
+    return locationManager.getUnreadMessageNotificationCount(_currentUsername);
+  }
+
+  void _openInbox() {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => DirectMessagesInboxPage(
+              locationManager: locationManager,
+              username: _currentUsername,
+              onUpdate: () => setState(() {}),
+            ),
+          ),
+        )
+        .then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+    });
+  }
+
+  void _openNotifications() {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => NotificationsPage(
+              locationManager: locationManager,
+              username: _currentUsername,
+              onUpdate: () => setState(() {}),
+            ),
+          ),
+        )
+        .then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+    });
+  }
+
+  Widget _buildHeaderActionIcon({
+    required IconData icon,
+    required int unreadCount,
+    required VoidCallback onTap,
+    required String tooltip,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          IconButton(
+            onPressed: onTap,
+            icon: Icon(icon),
+            tooltip: tooltip,
+          ),
+          if (unreadCount > 0)
+            Positioned(
+              right: 2,
+              top: 2,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFB42318),
+                  borderRadius: BorderRadius.all(Radius.circular(10)),
+                ),
+                child: Text(
+                  unreadCount > 99 ? '99+' : unreadCount.toString(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1738,6 +2115,22 @@ class _HomePageState extends State<HomePage> {
     bob?.followUser('Admin');
     admin?.addFollower('Bob456');
     alice?.addFollower('Admin');
+
+    // Seed sample direct messages
+    if (_currentUsername != 'Alice123') {
+      locationManager.sendDirectMessage(
+        fromUsername: 'Alice123',
+        toUsername: _currentUsername,
+        messageText: 'Hey! We found a great overnight spot near Flagstaff if you need one.',
+      );
+    }
+    if (_currentUsername != 'Bob456') {
+      locationManager.sendDirectMessage(
+        fromUsername: 'Bob456',
+        toUsername: _currentUsername,
+        messageText: 'Do you know if the propane refill in Mesa is open late?',
+      );
+    }
 
     _seedCuratedPoiDatabase();
 
@@ -1862,6 +2255,20 @@ class _HomePageState extends State<HomePage> {
         title: const Text('Nomad Network'),
         centerTitle: true,
         elevation: 0,
+        actions: [
+          _buildHeaderActionIcon(
+            icon: Icons.notifications_none,
+            unreadCount: _unreadNotificationCount(),
+            onTap: _openNotifications,
+            tooltip: 'Notifications',
+          ),
+          _buildHeaderActionIcon(
+            icon: Icons.mail_outline,
+            unreadCount: _unreadInboxCount(),
+            onTap: _openInbox,
+            tooltip: 'Inbox',
+          ),
+        ],
       ),
       body: SafeArea(
         top: false,
@@ -6627,6 +7034,51 @@ class SocialPage extends StatefulWidget {
 }
 
 class _SocialPageState extends State<SocialPage> {
+  int _unreadMessageCount() {
+    return widget.locationManager.getUnreadMessageNotificationCount(widget.username);
+  }
+
+  void _openInbox() {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => DirectMessagesInboxPage(
+              locationManager: widget.locationManager,
+              username: widget.username,
+              onUpdate: widget.onUpdate,
+            ),
+          ),
+        )
+        .then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      widget.onUpdate();
+    });
+  }
+
+  void _openMessageThread(String peerUsername) {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => DirectMessageThreadPage(
+              locationManager: widget.locationManager,
+              currentUsername: widget.username,
+              peerUsername: peerUsername,
+              onUpdate: widget.onUpdate,
+            ),
+          ),
+        )
+        .then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      widget.onUpdate();
+    });
+  }
+
   void _openPublicProfile(String profileUsername) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -6638,6 +7090,29 @@ class _SocialPageState extends State<SocialPage> {
         ),
       ),
     );
+  }
+
+  void _openPostDetail(_SocialFeedEntry entry, {int initialPhotoIndex = 0}) {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => PostDetailPage(
+              locationManager: widget.locationManager,
+              currentUsername: widget.username,
+              postOwnerUsername: entry.username,
+              post: entry.post,
+              onUpdate: widget.onUpdate,
+              initialPhotoIndex: initialPhotoIndex,
+            ),
+          ),
+        )
+        .then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      widget.onUpdate();
+    });
   }
 
   bool _canViewProfileDetails(RVUser profileUser) {
@@ -6664,7 +7139,42 @@ class _SocialPageState extends State<SocialPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Social Feed', style: Theme.of(context).textTheme.titleLarge),
+                  Row(
+                    children: [
+                      Text('Social Feed', style: Theme.of(context).textTheme.titleLarge),
+                      const Spacer(),
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          IconButton(
+                            onPressed: _openInbox,
+                            icon: const Icon(Icons.mail_outline),
+                            tooltip: 'Direct messages',
+                          ),
+                          if (_unreadMessageCount() > 0)
+                            Positioned(
+                              right: 2,
+                              top: 2,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFB42318),
+                                  borderRadius: BorderRadius.all(Radius.circular(10)),
+                                ),
+                                child: Text(
+                                  _unreadMessageCount() > 99 ? '99+' : _unreadMessageCount().toString(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 6),
                   Text(
                     'See the latest updates and share posts or pin drops with photos and videos.',
@@ -6856,7 +7366,14 @@ class _SocialPageState extends State<SocialPage> {
                 ),
               ),
             ],
-            _buildMediaAttachments(context, photos: post.photos, videos: post.videos),
+            _buildMediaAttachments(
+              context,
+              photos: post.photos,
+              videos: post.videos,
+              onPhotoTap: (photoIndex, photoUrl) {
+                _openPostDetail(entry, initialPhotoIndex: photoIndex);
+              },
+            ),
           ],
         ),
       ),
@@ -7368,6 +7885,14 @@ class _SocialPageState extends State<SocialPage> {
               },
               child: const Text('View Profile'),
             ),
+            if (!isOwnProfile && profileUser.preferences.allowMessages)
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _openMessageThread(profileUsername);
+                },
+                child: const Text('Message'),
+              ),
             if (!isOwnProfile)
               TextButton(
                 onPressed: () {
@@ -7489,6 +8014,50 @@ class _PublicUserProfilePageState extends State<PublicUserProfilePage> {
     return parts.join(' ');
   }
 
+  void _openMessageThread(String peerUsername) {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => DirectMessageThreadPage(
+              locationManager: widget.locationManager,
+              currentUsername: widget.viewerUsername,
+              peerUsername: peerUsername,
+              onUpdate: widget.onUpdate,
+            ),
+          ),
+        )
+        .then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      widget.onUpdate();
+    });
+  }
+
+  void _openPostDetail(Adventure post, {int initialPhotoIndex = 0}) {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => PostDetailPage(
+              locationManager: widget.locationManager,
+              currentUsername: widget.viewerUsername,
+              postOwnerUsername: widget.profileUsername,
+              post: post,
+              onUpdate: widget.onUpdate,
+              initialPhotoIndex: initialPhotoIndex,
+            ),
+          ),
+        )
+        .then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      widget.onUpdate();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final profileUser = widget.locationManager.users[widget.profileUsername];
@@ -7565,20 +8134,34 @@ class _PublicUserProfilePageState extends State<PublicUserProfilePage> {
                     ),
                     if (!isOwnProfile) ...[
                       const SizedBox(height: 12),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: ElevatedButton(
-                          onPressed: () => _toggleFollow(currentUser, profileUser),
-                          child: Text(
-                            isFollowing
-                                ? 'Unfollow'
-                                : hasPendingRequest
-                                    ? 'Cancel Request'
-                                    : profileUser.preferences.requireFollowApproval
-                                        ? 'Request Follow'
-                                        : 'Follow',
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: [
+                          ElevatedButton(
+                            onPressed: () => _toggleFollow(currentUser, profileUser),
+                            child: Text(
+                              isFollowing
+                                  ? 'Unfollow'
+                                  : hasPendingRequest
+                                      ? 'Cancel Request'
+                                      : profileUser.preferences.requireFollowApproval
+                                          ? 'Request Follow'
+                                          : 'Follow',
+                            ),
                           ),
-                        ),
+                          OutlinedButton.icon(
+                            onPressed: profileUser.preferences.allowMessages
+                                ? () => _openMessageThread(profileUser.username)
+                                : null,
+                            icon: const Icon(Icons.mail_outline),
+                            label: Text(
+                              profileUser.preferences.allowMessages
+                                  ? 'Message'
+                                  : 'Messaging Off',
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ],
@@ -7660,11 +8243,23 @@ class _PublicUserProfilePageState extends State<PublicUserProfilePage> {
                                 Text(post.title, style: Theme.of(context).textTheme.titleSmall),
                                 const SizedBox(height: 4),
                                 Text(post.description),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '${post.likedBy.length} likes • ${post.comments.length} comments',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
                                 if (post.locationName.trim().isNotEmpty) ...[
                                   const SizedBox(height: 4),
                                   Text(post.locationName, style: Theme.of(context).textTheme.bodySmall),
                                 ],
-                                _buildMediaAttachments(context, photos: post.photos, videos: post.videos),
+                                _buildMediaAttachments(
+                                  context,
+                                  photos: post.photos,
+                                  videos: post.videos,
+                                  onPhotoTap: (photoIndex, photoUrl) {
+                                    _openPostDetail(post, initialPhotoIndex: photoIndex);
+                                  },
+                                ),
                                 if (post != recentAdventures.take(8).last)
                                   const Divider(height: 20),
                               ],
@@ -7678,6 +8273,729 @@ class _PublicUserProfilePageState extends State<PublicUserProfilePage> {
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+class PostDetailPage extends StatefulWidget {
+  final RVLocationManager locationManager;
+  final String currentUsername;
+  final String postOwnerUsername;
+  final Adventure post;
+  final VoidCallback onUpdate;
+  final int initialPhotoIndex;
+
+  const PostDetailPage({
+    required this.locationManager,
+    required this.currentUsername,
+    required this.postOwnerUsername,
+    required this.post,
+    required this.onUpdate,
+    this.initialPhotoIndex = 0,
+    super.key,
+  });
+
+  @override
+  State<PostDetailPage> createState() => _PostDetailPageState();
+}
+
+class _PostDetailPageState extends State<PostDetailPage> {
+  late final PageController _photoPageController;
+  final TextEditingController _commentController = TextEditingController();
+  int _currentPhotoIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    final maxIndex = widget.post.photos.isEmpty ? 0 : widget.post.photos.length - 1;
+    _currentPhotoIndex = widget.initialPhotoIndex.clamp(0, maxIndex);
+    _photoPageController = PageController(initialPage: _currentPhotoIndex);
+  }
+
+  @override
+  void dispose() {
+    _photoPageController.dispose();
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  String _timeAgo(DateTime time) {
+    final now = DateTime.now();
+    final diff = now.difference(time);
+    if (diff.inMinutes < 1) {
+      return 'now';
+    }
+    if (diff.inHours < 1) {
+      return '${diff.inMinutes}m';
+    }
+    if (diff.inDays < 1) {
+      return '${diff.inHours}h';
+    }
+    if (diff.inDays < 7) {
+      return '${diff.inDays}d';
+    }
+    return '${time.month}/${time.day}/${time.year}';
+  }
+
+  void _toggleLike() {
+    final wasLiked = widget.post.isLikedBy(widget.currentUsername);
+    widget.post.toggleLike(widget.currentUsername);
+
+    if (!wasLiked && widget.postOwnerUsername != widget.currentUsername) {
+      widget.locationManager.addNotificationForUser(
+        username: widget.postOwnerUsername,
+        title: '@${widget.currentUsername} liked your post',
+        body: widget.post.title.trim().isEmpty ? 'Your update got a new like.' : widget.post.title,
+        type: 'post_like',
+        relatedUsername: widget.currentUsername,
+      );
+    }
+
+    widget.onUpdate();
+    setState(() {});
+  }
+
+  void _submitComment() {
+    final normalized = _normalizeNullableText(_commentController.text);
+    if (normalized == null) {
+      return;
+    }
+
+    final comment = PostComment(
+      id: 'comment_${DateTime.now().microsecondsSinceEpoch}',
+      username: widget.currentUsername,
+      text: normalized,
+    );
+    widget.post.addComment(comment);
+    _commentController.clear();
+
+    if (widget.postOwnerUsername != widget.currentUsername) {
+      widget.locationManager.addNotificationForUser(
+        username: widget.postOwnerUsername,
+        title: '@${widget.currentUsername} commented on your post',
+        body: normalized.length > 90 ? '${normalized.substring(0, 90)}...' : normalized,
+        type: 'post_comment',
+        relatedUsername: widget.currentUsername,
+      );
+    }
+
+    widget.onUpdate();
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isLiked = widget.post.isLikedBy(widget.currentUsername);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('@${widget.postOwnerUsername} post'),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.post.photos.isNotEmpty)
+              Column(
+                children: [
+                  AspectRatio(
+                    aspectRatio: 1,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: PageView.builder(
+                        controller: _photoPageController,
+                        itemCount: widget.post.photos.length,
+                        onPageChanged: (index) {
+                          setState(() => _currentPhotoIndex = index);
+                        },
+                        itemBuilder: (context, index) {
+                          return Container(
+                            color: Colors.black,
+                            alignment: Alignment.center,
+                            child: InteractiveViewer(
+                              minScale: 1,
+                              maxScale: 4,
+                              child: _buildMediaImage(
+                                widget.post.photos[index],
+                                width: double.infinity,
+                                height: double.infinity,
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Photo ${_currentPhotoIndex + 1} of ${widget.post.photos.length}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              )
+            else
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  color: const Color(0xFFF5F9F7),
+                ),
+                child: const Text('This post has no photos.'),
+              ),
+            const SizedBox(height: 14),
+            if (widget.post.title.trim().isNotEmpty)
+              Text(widget.post.title, style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 6),
+            Text(widget.post.description),
+            if (widget.post.locationName.trim().isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(widget.post.locationName, style: Theme.of(context).textTheme.bodySmall),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                IconButton(
+                  onPressed: _toggleLike,
+                  icon: Icon(
+                    isLiked ? Icons.favorite : Icons.favorite_border,
+                    color: isLiked ? Colors.red : null,
+                  ),
+                ),
+                Text('${widget.post.likedBy.length} likes'),
+                const SizedBox(width: 16),
+                const Icon(Icons.comment_outlined, size: 20),
+                const SizedBox(width: 6),
+                Text('${widget.post.comments.length} comments'),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _commentController,
+                    decoration: const InputDecoration(
+                      hintText: 'Write a comment...',
+                      border: OutlineInputBorder(),
+                    ),
+                    minLines: 1,
+                    maxLines: 3,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _submitComment,
+                  icon: const Icon(Icons.send),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (widget.post.comments.isEmpty)
+              Text('No comments yet. Be the first to comment.', style: Theme.of(context).textTheme.bodySmall)
+            else
+              ...widget.post.comments.reversed.map((comment) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFE5EAF0)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              '@${comment.username}',
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _timeAgo(comment.createdAt),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(comment.text),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class DirectMessagesInboxPage extends StatefulWidget {
+  final RVLocationManager locationManager;
+  final String username;
+  final VoidCallback onUpdate;
+
+  const DirectMessagesInboxPage({
+    required this.locationManager,
+    required this.username,
+    required this.onUpdate,
+    super.key,
+  });
+
+  @override
+  State<DirectMessagesInboxPage> createState() => _DirectMessagesInboxPageState();
+}
+
+class _DirectMessagesInboxPageState extends State<DirectMessagesInboxPage> {
+  String _timeAgo(DateTime time) {
+    final now = DateTime.now();
+    final difference = now.difference(time);
+    if (difference.inMinutes < 1) {
+      return 'now';
+    }
+    if (difference.inHours < 1) {
+      return '${difference.inMinutes}m';
+    }
+    if (difference.inDays < 1) {
+      return '${difference.inHours}h';
+    }
+    if (difference.inDays < 7) {
+      return '${difference.inDays}d';
+    }
+    return '${time.month}/${time.day}';
+  }
+
+  void _openThread(String peerUsername) {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => DirectMessageThreadPage(
+              locationManager: widget.locationManager,
+              currentUsername: widget.username,
+              peerUsername: peerUsername,
+              onUpdate: widget.onUpdate,
+            ),
+          ),
+        )
+        .then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      widget.onUpdate();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final peers = widget.locationManager.getConversationPeers(widget.username);
+    final notifications = widget.locationManager
+        .getNotificationsForUser(widget.username)
+        .where((notification) => notification.type == 'direct_message')
+        .take(8)
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Direct Messages')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Notifications',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 8),
+                    if (notifications.isEmpty)
+                      Text('No new message notifications.', style: Theme.of(context).textTheme.bodySmall)
+                    else
+                      ...notifications.map((notification) {
+                        final relatedUser = notification.relatedUsername;
+                        return ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            notification.isRead ? Icons.mark_email_read_outlined : Icons.markunread,
+                            color: notification.isRead ? Colors.grey : const Color(0xFF0F4C81),
+                          ),
+                          title: Text(notification.title),
+                          subtitle: Text(notification.body, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          trailing: Text(_timeAgo(notification.createdAt), style: Theme.of(context).textTheme.bodySmall),
+                          onTap: relatedUser == null
+                              ? null
+                              : () {
+                                  widget.locationManager.markNotificationAsRead(
+                                    username: widget.username,
+                                    notificationId: notification.id,
+                                  );
+                                  setState(() {});
+                                  _openThread(relatedUser);
+                                },
+                        );
+                      }),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Conversations',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 8),
+                    if (peers.isEmpty)
+                      Text('No conversations yet. Visit a profile and tap Message.', style: Theme.of(context).textTheme.bodySmall)
+                    else
+                      ...peers.map((peerUsername) {
+                        final lastMessage = widget.locationManager.getLastMessage(widget.username, peerUsername);
+                        final unreadCount = widget.locationManager.getUnreadThreadMessageCount(
+                          username: widget.username,
+                          peerUsername: peerUsername,
+                        );
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: CircleAvatar(
+                            backgroundColor: Colors.orange[200],
+                            child: Text(peerUsername[0].toUpperCase()),
+                          ),
+                          title: Text(peerUsername),
+                          subtitle: Text(
+                            lastMessage == null ? 'No messages yet.' : lastMessage.text,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              if (lastMessage != null)
+                                Text(_timeAgo(lastMessage.sentAt), style: Theme.of(context).textTheme.bodySmall),
+                              if (unreadCount > 0)
+                                Container(
+                                  margin: const EdgeInsets.only(top: 4),
+                                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFFB42318),
+                                    borderRadius: BorderRadius.all(Radius.circular(10)),
+                                  ),
+                                  child: Text(
+                                    unreadCount > 99 ? '99+' : unreadCount.toString(),
+                                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          onTap: () => _openThread(peerUsername),
+                        );
+                      }),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class NotificationsPage extends StatefulWidget {
+  final RVLocationManager locationManager;
+  final String username;
+  final VoidCallback onUpdate;
+
+  const NotificationsPage({
+    required this.locationManager,
+    required this.username,
+    required this.onUpdate,
+    super.key,
+  });
+
+  @override
+  State<NotificationsPage> createState() => _NotificationsPageState();
+}
+
+class _NotificationsPageState extends State<NotificationsPage> {
+  String _timeAgo(DateTime time) {
+    final now = DateTime.now();
+    final difference = now.difference(time);
+    if (difference.inMinutes < 1) {
+      return 'now';
+    }
+    if (difference.inHours < 1) {
+      return '${difference.inMinutes}m';
+    }
+    if (difference.inDays < 1) {
+      return '${difference.inHours}h';
+    }
+    if (difference.inDays < 7) {
+      return '${difference.inDays}d';
+    }
+    return '${time.month}/${time.day}';
+  }
+
+  void _openThreadFromNotification(String peerUsername) {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => DirectMessageThreadPage(
+              locationManager: widget.locationManager,
+              currentUsername: widget.username,
+              peerUsername: peerUsername,
+              onUpdate: widget.onUpdate,
+            ),
+          ),
+        )
+        .then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      widget.onUpdate();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final notifications = widget.locationManager.getNotificationsForUser(widget.username);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Notifications')),
+      body: notifications.isEmpty
+          ? Center(
+              child: Text(
+                'No notifications yet.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            )
+          : ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemCount: notifications.length,
+              separatorBuilder: (_, _) => const Divider(height: 0),
+              itemBuilder: (context, index) {
+                final notification = notifications[index];
+                final relatedUser = notification.relatedUsername;
+
+                return ListTile(
+                  leading: Icon(
+                    notification.isRead ? Icons.notifications_none : Icons.notifications_active,
+                    color: notification.isRead ? Colors.grey : const Color(0xFF0F4C81),
+                  ),
+                  title: Text(notification.title),
+                  subtitle: Text(notification.body),
+                  trailing: Text(_timeAgo(notification.createdAt), style: Theme.of(context).textTheme.bodySmall),
+                  onTap: () {
+                    widget.locationManager.markNotificationAsRead(
+                      username: widget.username,
+                      notificationId: notification.id,
+                    );
+                    setState(() {});
+                    widget.onUpdate();
+
+                    if (notification.type == 'direct_message' && relatedUser != null) {
+                      _openThreadFromNotification(relatedUser);
+                    }
+                  },
+                );
+              },
+            ),
+    );
+  }
+}
+
+class DirectMessageThreadPage extends StatefulWidget {
+  final RVLocationManager locationManager;
+  final String currentUsername;
+  final String peerUsername;
+  final VoidCallback onUpdate;
+
+  const DirectMessageThreadPage({
+    required this.locationManager,
+    required this.currentUsername,
+    required this.peerUsername,
+    required this.onUpdate,
+    super.key,
+  });
+
+  @override
+  State<DirectMessageThreadPage> createState() => _DirectMessageThreadPageState();
+}
+
+class _DirectMessageThreadPageState extends State<DirectMessageThreadPage> {
+  final TextEditingController _messageController = TextEditingController();
+
+  String _timestamp(DateTime time) {
+    final local = time.toLocal();
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${local.hour}:$minute';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.locationManager.markThreadAsRead(
+      username: widget.currentUsername,
+      peerUsername: widget.peerUsername,
+    );
+    widget.onUpdate();
+  }
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    super.dispose();
+  }
+
+  void _sendMessage() {
+    final text = _messageController.text.trim();
+    if (text.isEmpty) {
+      return;
+    }
+
+    try {
+      widget.locationManager.sendDirectMessage(
+        fromUsername: widget.currentUsername,
+        toUsername: widget.peerUsername,
+        messageText: text,
+      );
+      _messageController.clear();
+      widget.onUpdate();
+      setState(() {});
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e is Exception ? e.toString().replaceFirst('Exception: ', '') : 'Unable to send message.',
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final peerUser = widget.locationManager.users[widget.peerUsername];
+    final messages = widget.locationManager.getThreadMessages(
+      widget.currentUsername,
+      widget.peerUsername,
+    );
+
+    final canSend = peerUser?.preferences.allowMessages ?? false;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('@${widget.peerUsername}'),
+      ),
+      body: Column(
+        children: [
+          if (!canSend)
+            Container(
+              width: double.infinity,
+              color: const Color(0xFFFFF3E0),
+              padding: const EdgeInsets.all(10),
+              child: const Text(
+                'This user is not accepting new messages right now.',
+                style: TextStyle(color: Color(0xFF8A4B00), fontWeight: FontWeight.w600),
+              ),
+            ),
+          Expanded(
+            child: messages.isEmpty
+                ? Center(
+                    child: Text(
+                      'No messages yet. Say hello to start the conversation.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final message = messages[index];
+                      final isMine = message.fromUsername == widget.currentUsername;
+
+                      return Align(
+                        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isMine ? const Color(0xFF0F4C81) : const Color(0xFFF5F9F7),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Column(
+                            crossAxisAlignment:
+                                isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                message.text,
+                                style: TextStyle(color: isMine ? Colors.white : const Color(0xFF182A2A)),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _timestamp(message.sentAt),
+                                style: TextStyle(
+                                  color: isMine ? Colors.white70 : const Color(0xFF6B7B7A),
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _messageController,
+                      minLines: 1,
+                      maxLines: 4,
+                      enabled: canSend,
+                      decoration: InputDecoration(
+                        hintText: canSend ? 'Type a message...' : 'Messaging is turned off',
+                        border: const OutlineInputBorder(),
+                      ),
+                      onSubmitted: (_) => _sendMessage(),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    onPressed: canSend ? _sendMessage : null,
+                    icon: const Icon(Icons.send),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
