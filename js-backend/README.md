@@ -22,8 +22,31 @@ npm install
 ### Run Example Demo
 
 ```bash
+npm run demo
+```
+
+### Run Signup Tracking API
+
+```bash
 npm start
 ```
+
+API endpoints:
+- `POST /api/signup-events` - store a new account creation event
+- `GET /api/signup-events` - list all signup events
+- `GET /api/signup-stats` - quick totals and daily counts
+
+Signup events are stored in `js-backend/data/signup-events.json`.
+
+### Connect Flutter App To Tracking API
+
+Pass the backend URL when launching Flutter:
+
+```bash
+flutter run --dart-define=SIGNUP_TRACKING_API_BASE_URL=http://YOUR_MACHINE_IP:3000
+```
+
+Use your Mac's LAN IP for physical iPhone testing (not `localhost`).
 
 ### Import in Your Project
 

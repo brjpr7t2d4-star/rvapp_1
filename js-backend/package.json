@@ -2,10 +2,15 @@
   "name": "rv-owner-app",
   "version": "1.0.0",
   "description": "RV Owner App - Allow users to submit new RV-friendly locations with reviews and ratings",
-  "main": "RVOwnerApp.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node example.js",
+    "start": "node server.js",
+    "demo": "node example.js",
     "test": "node tests/test.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
   },
   "keywords": [
     "RV",

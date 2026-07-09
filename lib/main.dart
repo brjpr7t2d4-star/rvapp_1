@@ -15,8 +15,10 @@ import 'dart:math';
 const bool kSeedSampleLocations = false;
 const String kGoogleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
 const String kCustomAppBackgroundImageKey = 'custom_app_background_image_url';
+const String kSignupTrackingApiBaseUrl = String.fromEnvironment('SIGNUP_TRACKING_API_BASE_URL');
 
 bool get hasGoogleMapsApiKey => kGoogleMapsApiKey.trim().isNotEmpty;
+bool get hasSignupTrackingApiBaseUrl => kSignupTrackingApiBaseUrl.trim().isNotEmpty;
 
 void main() {
   runApp(const RVOwnerApp());
@@ -854,7 +856,7 @@ class _AppEntryPageState extends State<AppEntryPage> {
     });
   }
 
-  Future<void> _completeOnboarding(SignupResult signup) async {
+  Future<void> _completeOnboarding(SignupResult signup, {bool shouldTrackSignup = true}) async {
     final selectedUsername = signup.username.trim().isEmpty
         ? 'CurrentUser'
         : signup.username.trim();
@@ -869,6 +871,10 @@ class _AppEntryPageState extends State<AppEntryPage> {
     await prefs.setDouble('rig_length_ft', signup.rigLengthFt);
     await prefs.setBool('is_towing', signup.isTowing);
     await prefs.setBool('has_pro_access', signup.hasProAccess);
+
+    if (shouldTrackSignup) {
+      await _trackSignupEvent(selectedUsername, signup);
+    }
 
     if (!mounted) {
       return;
@@ -899,7 +905,37 @@ class _AppEntryPageState extends State<AppEntryPage> {
         isTowing: false,
         hasProAccess: false,
       ),
+      shouldTrackSignup: false,
     );
+  }
+
+  Future<void> _trackSignupEvent(String username, SignupResult signup) async {
+    if (!hasSignupTrackingApiBaseUrl) {
+      return;
+    }
+
+    final endpoint = Uri.parse('${kSignupTrackingApiBaseUrl.trim()}/api/signup-events');
+    try {
+      await http
+          .post(
+            endpoint,
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'username': username,
+              'email': signup.email.trim(),
+              'hasProAccess': signup.hasProAccess,
+              'isTowing': signup.isTowing,
+              'rigHeightFt': signup.rigHeightFt,
+              'rigWeightLbs': signup.rigWeightLbs,
+              'rigLengthFt': signup.rigLengthFt,
+              'platform': defaultTargetPlatform.name,
+              'createdAt': DateTime.now().toUtc().toIso8601String(),
+            }),
+          )
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {
+      // Ignore telemetry failures so account creation still succeeds offline.
+    }
   }
 
   @override
@@ -7051,11 +7087,19 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final TextEditingController _backgroundPhotoController = TextEditingController();
+  bool _loadingSignupStats = false;
+  String? _signupStatsError;
+  int _totalSignups = 0;
+  int _proSignups = 0;
+  Map<String, int> _dailySignups = const {};
 
   @override
   void initState() {
     super.initState();
     _loadCustomBackgroundPhoto();
+    if (widget.username.toLowerCase() == 'admin') {
+      _loadSignupStats();
+    }
   }
 
   @override
@@ -7124,6 +7168,126 @@ class _SettingsPageState extends State<SettingsPage> {
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const AppEntryPage()),
       (route) => false,
+    );
+  }
+
+  Future<void> _loadSignupStats() async {
+    if (!hasSignupTrackingApiBaseUrl) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _signupStatsError = 'Set SIGNUP_TRACKING_API_BASE_URL to view signup analytics.';
+      });
+      return;
+    }
+
+    setState(() {
+      _loadingSignupStats = true;
+      _signupStatsError = null;
+    });
+
+    try {
+      final endpoint = Uri.parse('${kSignupTrackingApiBaseUrl.trim()}/api/signup-stats');
+      final response = await http.get(endpoint).timeout(const Duration(seconds: 4));
+
+      if (response.statusCode != 200) {
+        throw Exception('Signup stats request failed (${response.statusCode}).');
+      }
+
+      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+      final rawDaily = (decoded['daily'] as Map<String, dynamic>? ?? const {});
+      final daily = <String, int>{};
+      rawDaily.forEach((key, value) {
+        daily[key] = (value as num?)?.toInt() ?? 0;
+      });
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _totalSignups = (decoded['totalSignups'] as num?)?.toInt() ?? 0;
+        _proSignups = (decoded['proSignups'] as num?)?.toInt() ?? 0;
+        _dailySignups = daily;
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _signupStatsError = e is Exception
+            ? e.toString().replaceFirst('Exception: ', '')
+            : 'Failed to load signup analytics.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingSignupStats = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildSignupAnalyticsSection() {
+    final sortedDaily = _dailySignups.entries.toList()..sort((a, b) => b.key.compareTo(a.key));
+    final recentEntries = sortedDaily.take(7).toList();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text('Signup Analytics', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: _loadingSignupStats ? null : _loadSignupStats,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Refresh'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (_loadingSignupStats) const LinearProgressIndicator(),
+            if (_signupStatsError != null) ...[
+              Text(
+                _signupStatsError!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ] else ...[
+              Text('Total Accounts: $_totalSignups'),
+              const SizedBox(height: 4),
+              Text('Pro Accounts: $_proSignups'),
+              const SizedBox(height: 4),
+              Text('Free Accounts: ${_totalSignups - _proSignups}'),
+              const SizedBox(height: 10),
+              Text('Last 7 Days', style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(height: 6),
+              if (recentEntries.isEmpty)
+                const Text('No signup data yet.')
+              else
+                Column(
+                  children: recentEntries
+                      .map(
+                        (entry) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Row(
+                            children: [
+                              Expanded(child: Text(entry.key)),
+                              Text(entry.value.toString()),
+                            ],
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -7209,6 +7373,8 @@ class _SettingsPageState extends State<SettingsPage> {
           if (widget.username.toLowerCase() == 'admin') ...[
             const SizedBox(height: 12),
             _buildPendingLocationApprovalSection(),
+            const SizedBox(height: 12),
+            _buildSignupAnalyticsSection(),
           ],
           const SizedBox(height: 20),
 
