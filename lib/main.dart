@@ -18,6 +18,7 @@ const String kGoogleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
 const String kCustomAppBackgroundImageKey = 'custom_app_background_image_url';
 const String kPersistedSocialStateKey = 'persisted_social_state_v1';
 const String kSignupTrackingApiBaseUrl = String.fromEnvironment('SIGNUP_TRACKING_API_BASE_URL');
+const String kTutorialCompletedKey = 'tutorial_completed';
 
 bool get hasGoogleMapsApiKey {
   final key = kGoogleMapsApiKey.trim();
@@ -1551,6 +1552,7 @@ class AppEntryPage extends StatefulWidget {
 class _AppEntryPageState extends State<AppEntryPage> {
   bool _isLoading = true;
   bool _needsOnboarding = true;
+  bool _showTutorial = false;
   String _username = 'CurrentUser';
   String? _email;
   String? _password;
@@ -1569,6 +1571,7 @@ class _AppEntryPageState extends State<AppEntryPage> {
   Future<void> _restoreSession() async {
     final prefs = await SharedPreferences.getInstance();
     final onboardingDone = prefs.getBool('onboarding_done') ?? false;
+    final tutorialCompleted = prefs.getBool(kTutorialCompletedKey) ?? false;
     final storedUsername = prefs.getString('username');
     final storedEmail = prefs.getString('email');
     final storedPassword = prefs.getString('password');
@@ -1584,6 +1587,7 @@ class _AppEntryPageState extends State<AppEntryPage> {
 
     setState(() {
       _needsOnboarding = !onboardingDone;
+      _showTutorial = onboardingDone && !tutorialCompleted;
       _username = storedUsername?.trim().isNotEmpty == true
           ? storedUsername!.trim()
           : 'CurrentUser';
@@ -1632,6 +1636,20 @@ class _AppEntryPageState extends State<AppEntryPage> {
       _isTowing = signup.isTowing;
       _hasProAccess = signup.hasProAccess;
       _needsOnboarding = false;
+      _showTutorial = signup.startTutorial;
+    });
+  }
+
+  Future<void> _completeTutorial() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(kTutorialCompletedKey, true);
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _showTutorial = false;
     });
   }
 
@@ -1646,6 +1664,7 @@ class _AppEntryPageState extends State<AppEntryPage> {
         rigLengthFt: 32.0,
         isTowing: false,
         hasProAccess: false,
+        startTutorial: false,
       ),
       shouldTrackSignup: false,
     );
@@ -1704,6 +1723,10 @@ class _AppEntryPageState extends State<AppEntryPage> {
       );
     }
 
+    if (_showTutorial) {
+      return AppTutorialPage(onFinish: _completeTutorial);
+    }
+
     return HomePage(
       initialUsername: _username,
       initialEmail: _email,
@@ -1726,6 +1749,7 @@ class SignupResult {
   final double rigLengthFt;
   final bool isTowing;
   final bool hasProAccess;
+  final bool startTutorial;
 
   const SignupResult({
     required this.username,
@@ -1736,7 +1760,166 @@ class SignupResult {
     required this.rigLengthFt,
     required this.isTowing,
     required this.hasProAccess,
+    this.startTutorial = true,
   });
+}
+
+class AppTutorialPage extends StatefulWidget {
+  final VoidCallback onFinish;
+
+  const AppTutorialPage({required this.onFinish, super.key});
+
+  @override
+  State<AppTutorialPage> createState() => _AppTutorialPageState();
+}
+
+class _AppTutorialPageState extends State<AppTutorialPage> {
+  final PageController _controller = PageController();
+  int _index = 0;
+
+  static const List<({IconData icon, String title, String description})> _steps = [
+    (
+      icon: Icons.explore,
+      title: 'Explore RV-Safe Stops',
+      description: 'Find campgrounds, truck stops, rest areas, and fuel with RV-aware routing constraints.',
+    ),
+    (
+      icon: Icons.camera_alt,
+      title: 'Share Posts and Photos',
+      description: 'Post photos from the road, then let other travelers like and comment on your updates.',
+    ),
+    (
+      icon: Icons.mark_chat_unread,
+      title: 'Messages and Alerts',
+      description: 'Use inbox and notifications to keep up with direct messages and follow activity.',
+    ),
+    (
+      icon: Icons.settings,
+      title: 'Tune Your Experience',
+      description: 'Adjust privacy, map settings, and account preferences anytime in Settings.',
+    ),
+  ];
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _next() {
+    if (_index >= _steps.length - 1) {
+      widget.onFinish();
+      return;
+    }
+    _controller.nextPage(duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Quick App Tour'),
+        actions: [
+          TextButton(
+            onPressed: widget.onFinish,
+            child: const Text('Skip'),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Step ${_index + 1} of ${_steps.length}', style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(height: 10),
+              Expanded(
+                child: PageView.builder(
+                  controller: _controller,
+                  itemCount: _steps.length,
+                  onPageChanged: (value) => setState(() => _index = value),
+                  itemBuilder: (context, index) {
+                    final step = _steps[index];
+                    return Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircleAvatar(
+                              radius: 36,
+                              backgroundColor: Theme.of(context).colorScheme.primary.withAlpha(28),
+                              child: Icon(step.icon, size: 36, color: Theme.of(context).colorScheme.primary),
+                            ),
+                            const SizedBox(height: 22),
+                            Text(
+                              step.title,
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              step.description,
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  _steps.length,
+                  (dotIndex) => Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    height: 8,
+                    width: _index == dotIndex ? 20 : 8,
+                    decoration: BoxDecoration(
+                      color: _index == dotIndex
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context).colorScheme.primary.withAlpha(70),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _index == 0
+                          ? null
+                          : () {
+                              _controller.previousPage(
+                                duration: const Duration(milliseconds: 220),
+                                curve: Curves.easeOutCubic,
+                              );
+                            },
+                      child: const Text('Back'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _next,
+                      child: Text(_index == _steps.length - 1 ? 'Finish' : 'Next'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class WelcomePage extends StatelessWidget {
@@ -1775,6 +1958,7 @@ class WelcomePage extends StatelessWidget {
           rigLengthFt: 32.0,
           isTowing: false,
           hasProAccess: false,
+          startTutorial: false,
         ),
       );
     }
@@ -1954,123 +2138,131 @@ class _SignupPageState extends State<SignupPage> {
 
   @override
   Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Create Account')),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Create your account and set your basic RV profile for safer routing.',
-              style: Theme.of(context).textTheme.titleMedium,
+      body: SafeArea(
+        child: GestureDetector(
+          onTap: () => FocusScope.of(context).unfocus(),
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomInset),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Create your account and set your basic RV profile for safer routing.',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _usernameController,
+                  textInputAction: TextInputAction.next,
+                  decoration: InputDecoration(
+                    labelText: 'Username',
+                    hintText: 'e.g. RoadNomad',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    hintText: 'you@example.com',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Password',
+                    hintText: 'At least 8 characters',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _confirmPasswordController,
+                  obscureText: true,
+                  textInputAction: TextInputAction.next,
+                  onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+                  decoration: InputDecoration(
+                    labelText: 'Confirm Password',
+                    border: const OutlineInputBorder(),
+                    errorText: _errorText,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Vehicle Profile Setup',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _rigHeightController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Rig Height (ft)',
+                    hintText: 'e.g. 12.8',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _rigWeightController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Rig Weight (lbs)',
+                    hintText: 'e.g. 18000',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _rigLengthController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _submit(),
+                  decoration: const InputDecoration(
+                    labelText: 'Rig Length (ft)',
+                    hintText: 'e.g. 34.5',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _isTowing,
+                  onChanged: (value) => setState(() => _isTowing = value),
+                  title: const Text('Towing a vehicle'),
+                  subtitle: const Text('Used by RV-safe routing checks'),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _startWithPro,
+                  onChanged: (value) => setState(() => _startWithPro = value),
+                  title: const Text('Start with Pro plan'),
+                  subtitle: const Text('Unlock advanced routing sequence and full offline cache regions'),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: _submit,
+                  child: const Text('Continue'),
+                ),
+              ],
             ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: _usernameController,
-              textInputAction: TextInputAction.next,
-              decoration: InputDecoration(
-                labelText: 'Username',
-                hintText: 'e.g. RoadNomad',
-                border: const OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _emailController,
-              keyboardType: TextInputType.emailAddress,
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
-                labelText: 'Email',
-                hintText: 'you@example.com',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _passwordController,
-              obscureText: true,
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
-                labelText: 'Password',
-                hintText: 'At least 8 characters',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _confirmPasswordController,
-              obscureText: true,
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) {},
-              decoration: InputDecoration(
-                labelText: 'Confirm Password',
-                border: const OutlineInputBorder(),
-                errorText: _errorText,
-              ),
-            ),
-            const SizedBox(height: 18),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Vehicle Profile Setup',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _rigHeightController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
-                labelText: 'Rig Height (ft)',
-                hintText: 'e.g. 12.8',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _rigWeightController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
-                labelText: 'Rig Weight (lbs)',
-                hintText: 'e.g. 18000',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _rigLengthController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) => _submit(),
-              decoration: const InputDecoration(
-                labelText: 'Rig Length (ft)',
-                hintText: 'e.g. 34.5',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _isTowing,
-              onChanged: (value) => setState(() => _isTowing = value),
-              title: const Text('Towing a vehicle'),
-              subtitle: const Text('Used by RV-safe routing checks'),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _startWithPro,
-              onChanged: (value) => setState(() => _startWithPro = value),
-              title: const Text('Start with Pro plan'),
-              subtitle: const Text('Unlock advanced routing sequence and full offline cache regions'),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _submit,
-              child: const Text('Continue'),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -9485,6 +9677,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _signOut() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('onboarding_done');
+    await prefs.remove(kTutorialCompletedKey);
     await prefs.remove('username');
     await prefs.remove('email');
     await prefs.remove('password');
