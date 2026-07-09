@@ -144,9 +144,31 @@ String? _normalizeNullableText(String? value) {
     return null;
   }
 
-  final normalized = trimmed.toLowerCase();
-  if (normalized == 'null' || normalized == 'undefined' || normalized == 'n/a' || normalized == 'na') {
+  bool isInvalidToken(String token) {
+    final normalized = token.trim().toLowerCase();
+    return normalized.isEmpty ||
+        normalized == 'null' ||
+        normalized == 'undefined' ||
+        normalized == 'n/a' ||
+        normalized == 'na';
+  }
+
+  if (isInvalidToken(trimmed)) {
     return null;
+  }
+
+  if (trimmed.contains(',')) {
+    final cleanedParts = trimmed
+        .split(',')
+        .map((part) => part.trim())
+        .where((part) => !isInvalidToken(part))
+        .toList();
+
+    if (cleanedParts.isEmpty) {
+      return null;
+    }
+
+    return cleanedParts.join(', ');
   }
 
   return trimmed;
