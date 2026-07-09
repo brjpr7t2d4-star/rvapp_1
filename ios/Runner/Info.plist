@@ -37,7 +37,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nomad Network uses your microphone when recording videos with sound.</string>
 	<key>GOOGLE_MAPS_API_KEY</key>
-	<string>YOUR_GOOGLE_MAPS_API_KEY</string>
+	<string></string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

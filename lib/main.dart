@@ -19,7 +19,13 @@ const String kCustomAppBackgroundImageKey = 'custom_app_background_image_url';
 const String kPersistedSocialStateKey = 'persisted_social_state_v1';
 const String kSignupTrackingApiBaseUrl = String.fromEnvironment('SIGNUP_TRACKING_API_BASE_URL');
 
-bool get hasGoogleMapsApiKey => kGoogleMapsApiKey.trim().isNotEmpty;
+bool get hasGoogleMapsApiKey {
+  final key = kGoogleMapsApiKey.trim();
+  if (key.isEmpty) {
+    return false;
+  }
+  return key != 'YOUR_GOOGLE_MAPS_API_KEY';
+}
 bool get hasSignupTrackingApiBaseUrl => kSignupTrackingApiBaseUrl.trim().isNotEmpty;
 
 Future<void> trackAnalyticsEvent({
@@ -9498,6 +9504,42 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Future<void> _sendFeedbackEmail() async {
+    final username = widget.username.trim();
+    final email = Uri.encodeComponent('support@nomadnetwork.app');
+    final subject = Uri.encodeComponent('Nomad Network Test Feedback');
+    final body = Uri.encodeComponent(
+      'Username: $username\n\n'
+      'What happened:\n'
+      '-\n\n'
+      'Expected behavior:\n'
+      '-\n\n'
+      'Device:\n'
+      '- iPhone model\n'
+      '- iOS version\n\n'
+      'Steps to reproduce:\n'
+      '1.\n'
+      '2.\n'
+      '3.',
+    );
+    final uri = Uri.parse('mailto:$email?subject=$subject&body=$body');
+
+    try {
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No email app available on this device.')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to open email app.')),
+        );
+      }
+    }
+  }
+
   Future<void> _loadSignupStats() async {
     if (!hasSignupTrackingApiBaseUrl) {
       if (!mounted) {
@@ -9972,6 +10014,29 @@ class _SettingsPageState extends State<SettingsPage> {
                       const Text('Following'),
                       Text('${user.following.length}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Feedback', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 6),
+                  const Text('Send test feedback directly from the app with your username and reproduction details.'),
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: _sendFeedbackEmail,
+                      icon: const Icon(Icons.bug_report_outlined),
+                      label: const Text('Send Feedback'),
+                    ),
                   ),
                 ],
               ),
