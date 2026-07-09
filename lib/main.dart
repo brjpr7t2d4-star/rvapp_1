@@ -271,7 +271,7 @@ class Review {
 class RVUser {
   final String username;
   final String? email;
-  final String? password;
+  String? password;
   final List<Review> reviews;
   int locationsAdded;
   String? rvMake;
@@ -427,6 +427,10 @@ class RVUser {
 
   void updateSubscription(bool proAccess) {
     hasProAccess = proAccess;
+  }
+
+  void updatePassword(String newPassword) {
+    password = _normalizeNullableText(newPassword);
   }
 }
 
@@ -8999,6 +9003,110 @@ class _SettingsPageState extends State<SettingsPage> {
   int _proSignups = 0;
   Map<String, int> _dailySignups = const {};
 
+  String _obscurePassword(String? password) {
+    final normalized = _normalizeNullableText(password);
+    if (normalized == null) {
+      return 'Not set';
+    }
+    if (normalized.length <= 4) {
+      return '*' * normalized.length;
+    }
+    final hidden = '*' * (normalized.length - 2);
+    return '${normalized[0]}$hidden${normalized[normalized.length - 1]}';
+  }
+
+  Future<void> _showResetPasswordDialog(RVUser user) async {
+    final newPasswordController = TextEditingController();
+    final confirmPasswordController = TextEditingController();
+    String? errorText;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Reset Password'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: newPasswordController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'New Password',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: confirmPasswordController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Confirm Password',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  if (errorText != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      errorText!,
+                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    final newPassword = newPasswordController.text;
+                    final confirmPassword = confirmPasswordController.text;
+
+                    if (newPassword.length < 8) {
+                      setDialogState(() {
+                        errorText = 'Password must be at least 8 characters.';
+                      });
+                      return;
+                    }
+
+                    if (newPassword != confirmPassword) {
+                      setDialogState(() {
+                        errorText = 'Passwords do not match.';
+                      });
+                      return;
+                    }
+
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setString('password', newPassword);
+
+                    if (!mounted || !dialogContext.mounted) {
+                      return;
+                    }
+
+                    setState(() {
+                      user.updatePassword(newPassword);
+                    });
+                    widget.onUpdate();
+
+                    Navigator.of(dialogContext).pop();
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(content: Text('Password updated successfully.')),
+                    );
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _openPublicProfile(String profileUsername) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -9486,7 +9594,63 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(height: 20),
 
           // Account Section
-          Text('Account', style: Theme.of(context).textTheme.titleMedium),
+          Text('Account Info', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Username'),
+                      Text(
+                        user.username,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Email'),
+                      Flexible(
+                        child: Text(
+                          _normalizeNullableText(user.email) ?? 'No email saved',
+                          textAlign: TextAlign.right,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Password'),
+                      Text(
+                        _obscurePassword(user.password),
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _showResetPasswordDialog(user),
+                      icon: const Icon(Icons.lock_reset),
+                      label: const Text('Reset Password'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 12),
           Card(
             child: Padding(
