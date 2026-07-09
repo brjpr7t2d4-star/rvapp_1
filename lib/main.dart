@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart' as latlng;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -49,6 +50,88 @@ Future<void> trackAnalyticsEvent({
   } catch (_) {
     // Do not block app usage if analytics endpoint is unreachable.
   }
+}
+
+Uri _appleMapsDirectionsUri(RVLocation location) {
+  return Uri.https('maps.apple.com', '/', {
+    'daddr': '${location.latitude},${location.longitude}',
+    'q': location.name,
+  });
+}
+
+Uri _googleMapsDirectionsWebUri(RVLocation location) {
+  return Uri.https('www.google.com', '/maps/dir/', {
+    'api': '1',
+    'destination': '${location.latitude},${location.longitude}',
+    'travelmode': 'driving',
+  });
+}
+
+Uri _googleMapsDirectionsAppUri(RVLocation location) {
+  return Uri.parse('comgooglemaps://?daddr=${location.latitude},${location.longitude}&directionsmode=driving');
+}
+
+Future<void> _launchDirectionsUri(
+  BuildContext context,
+  Uri preferred,
+  Uri fallback,
+) async {
+  try {
+    bool launched = false;
+    if (await canLaunchUrl(preferred)) {
+      launched = await launchUrl(preferred, mode: LaunchMode.externalApplication);
+    }
+    if (!launched) {
+      launched = await launchUrl(fallback, mode: LaunchMode.externalApplication);
+    }
+
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to open directions app.')),
+      );
+    }
+  } catch (_) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to open directions app.')),
+      );
+    }
+  }
+}
+
+Future<void> showDirectionsOptionsSheet(BuildContext context, RVLocation location) async {
+  final appleUri = _appleMapsDirectionsUri(location);
+  final googleAppUri = _googleMapsDirectionsAppUri(location);
+  final googleWebUri = _googleMapsDirectionsWebUri(location);
+
+  await showModalBottomSheet<void>(
+    context: context,
+    builder: (sheetContext) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.map),
+              title: const Text('Open in Apple Maps'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                _launchDirectionsUri(context, appleUri, appleUri);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.navigation),
+              title: const Text('Open in Google Maps'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                _launchDirectionsUri(context, googleAppUri, googleWebUri);
+              },
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 void main() {
@@ -3123,6 +3206,15 @@ class _LocationDetailPageState extends State<LocationDetailPage> {
                     const SizedBox(height: 8),
                     Text(widget.location.details!),
                   ],
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => showDirectionsOptionsSheet(context, widget.location),
+                      icon: const Icon(Icons.directions),
+                      label: const Text('Get Directions'),
+                    ),
+                  ),
                   _buildMediaAttachments(
                     context,
                     photos: widget.location.photos,
@@ -4683,6 +4775,9 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
           markerId: gmaps.MarkerId(location.id),
           position: gmaps.LatLng(location.latitude, location.longitude),
           icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(_markerHueForType(location.type)),
+          onTap: () {
+            showDirectionsOptionsSheet(context, location);
+          },
           infoWindow: gmaps.InfoWindow(
             title: location.name,
             snippet: location.type,
@@ -4732,10 +4827,15 @@ class _MapWeatherPageState extends State<MapWeatherPage> {
               height: 30,
               child: Tooltip(
                 message: '${location.name}\n${location.type}',
-                child: Icon(
-                  _markerIconForType(location.type),
-                  color: _markerColorForType(location.type),
-                  size: 24,
+                child: GestureDetector(
+                  onTap: () {
+                    showDirectionsOptionsSheet(context, location);
+                  },
+                  child: Icon(
+                    _markerIconForType(location.type),
+                    color: _markerColorForType(location.type),
+                    size: 24,
+                  ),
                 ),
               ),
             ),
@@ -6313,6 +6413,7 @@ class _DashboardPageState extends State<DashboardPage> {
                     (entry) => Card(
                       margin: const EdgeInsets.only(bottom: 10),
                       child: ListTile(
+                        onTap: () => showDirectionsOptionsSheet(context, entry.key),
                         leading: const CircleAvatar(
                           backgroundColor: Color(0xFFFEEAD8),
                           child: Icon(Icons.local_gas_station, color: Color(0xFFEF6C00)),
